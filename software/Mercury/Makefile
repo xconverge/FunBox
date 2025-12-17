@@ -10,7 +10,7 @@ APP_TYPE = BOOT_SRAM
 OPT=-Ofast
 
 # Sources
-CPP_SOURCES = mercury.cpp
+CPP_SOURCES = mercury.cpp funbox_hardware.cpp
 
 # Library Locations
 LIBDAISY_DIR = ../../libDaisy

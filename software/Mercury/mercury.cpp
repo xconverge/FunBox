@@ -2,9 +2,9 @@
 
 #include <q/fx/biquad.hpp>
 
-#include "daisy_petal.h"
 #include "daisysp.h"
 #include "funbox.h"
+#include "funbox_hardware.h"
 #include "wavenet/wavenet_model.hpp"
 
 // Model Weights (edit this file to add model weights trained with Colab script)
@@ -16,7 +16,7 @@ using namespace funbox;  // This is important for mapping the correct controls
                          // to the Daisy Seed on Funbox PCB
 
 // Declare a local daisy_petal for hardware access
-DaisyPetal hw;
+FunboxHardware hw;
 Parameter gain, level, presence, bass, mid, treble, expression;
 bool bypass;
 int modelIndex = 0;
