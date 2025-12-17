@@ -22,6 +22,3 @@
 [submodule "software/Earth"]
 	path = software/Earth
 	url = https://github.com/GuitarML/Earth.git
-[submodule "software/Mercury"]
-	path = software/Mercury
-	url = https://github.com/GuitarML/Mercury.git
