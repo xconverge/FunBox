@@ -29,7 +29,7 @@ float nnLevelAdjust;
 Autowah autowah;
 bool autowah_enabled = false;
 
-float knobValues[6];  // Moved to global
+float knobValues[6];
 int toggleValues[3];
 bool dipValues[4];
 
@@ -374,7 +374,6 @@ int main(void) {
   hw.Init(true);
   samplerate = hw.AudioSampleRate();
 
-  setupWeightsNam();
   hw.SetAudioBlockSize(48);
 
   switch1[0] = Funbox::SWITCH_1_LEFT;
@@ -399,11 +398,13 @@ int main(void) {
   pdip[2] = true;
   pdip[3] = true;
 
-  setupWeightsNam();  // in the model data nam .h file
   // Read switches once so correct model is selected from startup
   hw.ProcessDigitalControls();
   InitializeSwitchesFromHardware();
+
+  setupWeightsNam();
   SelectModel();
+
   setPopReduce = 1.0;
   popReduce = 1.0;
 
@@ -425,10 +426,6 @@ int main(void) {
   expression.Init(hw.expression, 0.0f, 1.0f,
                   Parameter::LINEAR);  // TODO Make sure this is the correct way
                                        // to reference expression
-
-  // Initialize the correct model
-  modelIndex = 0;
-  nnLevelAdjust = 1.0;  // TODO Use level adjust to get model volumes even
 
   // Init the LEDs and set activate bypass
   led1.Init(hw.seed.GetPin(Funbox::LED_1), false);
