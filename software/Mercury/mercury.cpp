@@ -33,7 +33,6 @@ float knobValues[6];  // Moved to global
 int toggleValues[3];
 bool dipValues[4];
 
-float dryMix, wetMix;
 bool silence_output = false;
 float setPopReduce, popReduce;
 
@@ -60,8 +59,13 @@ struct NAMMathsProvider {
 
 constexpr uint8_t NUM_FILTERS_NAM = 4;
 
-const float minGain = -10.f;
-const float maxGain = 10.f;
+// EQ mapping constants (0..1 knob -> dB)
+constexpr float EQ_DB_RANGE = 20.0f;
+constexpr float EQ_DB_OFFSET = -10.0f;
+static inline float mapEqDb(float v) { return v * EQ_DB_RANGE + EQ_DB_OFFSET; }
+
+// Toggle position names for readability
+enum TogglePos { TOGGLE_LEFT = 0, TOGGLE_MIDDLE = 1, TOGGLE_RIGHT = 2 };
 
 const float centerFrequencyNam[NUM_FILTERS_NAM] = {
     180.f, 1200.f, 4000.f, 8000.f};  // Experiment with these freqs and q values
@@ -111,22 +115,22 @@ void SelectModel() {
 }
 
 void updateSwitch1or2() {
-  if (toggleValues[0] == 0) {  // low gain models
-    if (toggleValues[1] == 0) {
+  if (toggleValues[0] == TOGGLE_LEFT) {  // low gain models
+    if (toggleValues[1] == TOGGLE_LEFT) {
       modelIndex = 0;
       nnLevelAdjust = 1.3;
-    } else if (toggleValues[1] == 1) {
+    } else if (toggleValues[1] == TOGGLE_MIDDLE) {
       modelIndex = 1;
       nnLevelAdjust = 1.6;
     } else {
       modelIndex = 2;
       nnLevelAdjust = 1.1;
     }
-  } else if (toggleValues[0] == 1) {  // med gain models
-    if (toggleValues[1] == 0) {
+  } else if (toggleValues[0] == TOGGLE_MIDDLE) {  // med gain models
+    if (toggleValues[1] == TOGGLE_LEFT) {
       modelIndex = 3;
       nnLevelAdjust = 1.0;
-    } else if (toggleValues[1] == 1) {
+    } else if (toggleValues[1] == TOGGLE_MIDDLE) {
       modelIndex = 4;
       nnLevelAdjust = 1.0;
     } else {
@@ -134,10 +138,10 @@ void updateSwitch1or2() {
       nnLevelAdjust = 0.7;
     }
   } else {  // high gain models
-    if (toggleValues[1] == 0) {
+    if (toggleValues[1] == TOGGLE_LEFT) {
       modelIndex = 6;
       nnLevelAdjust = 0.9;
-    } else if (toggleValues[1] == 1) {
+    } else if (toggleValues[1] == TOGGLE_MIDDLE) {
       modelIndex = 7;
       nnLevelAdjust = 0.9;
     } else {
@@ -148,16 +152,39 @@ void updateSwitch1or2() {
   silence_output = true;
   popReduce = 1.0;
   setPopReduce = 0.0;
-  // SelectModel();
 }
 
 void updateSwitch3() {
-  if (toggleValues[2] == 0) {
+  if (toggleValues[2] == TOGGLE_LEFT) {
     autowah_enabled = false;
-  } else if (toggleValues[2] == 2) {
+  } else if (toggleValues[2] == TOGGLE_RIGHT) {
     autowah_enabled = true;
   } else {
     autowah_enabled = false;
+  }
+}
+
+// Configure EQ filters from mapped dB values
+static inline void ConfigureEq(float vbass, float vmid, float vtreble,
+                               float vpresence) {
+  filter_nam[0].config(vbass, centerFrequencyNam[0], 48000, q_nam[0]);
+  filter_nam[1].config(vmid, centerFrequencyNam[1], 48000, q_nam[1]);
+  filter_nam[2].config(vtreble, centerFrequencyNam[2], 48000, q_nam[2]);
+  filter_nam[3].config(vpresence, centerFrequencyNam[3], 48000, q_nam[3]);
+}
+
+// Handle pop-reduce gating during model switches
+static inline void ProcessModelSwitchGate() {
+  if (silence_output) {
+    fonepole(popReduce, setPopReduce, .0002f);
+    if (popReduce < 0.0003 && setPopReduce == 0.0f) {
+      SelectModel();
+      setPopReduce = 1.0f;
+    }
+    if (popReduce > 0.99f && setPopReduce == 1.0f) {
+      popReduce = 1.0f;
+      silence_output = false;
+    }
   }
 }
 
@@ -284,23 +311,19 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   knobValues[4] = mid.Process();
   knobValues[5] = treble.Process();
 
-  float vgain = knobValues[0];
-  float vlevel = knobValues[1];
-  float vpresence =
-      knobValues[2] * 20.0 - 10.0;  // Make eq control range from -10 to +10 dB
-  float vbass = knobValues[3] * 20.0 - 10.0;
-  float vmid = knobValues[4] * 20.0 - 10.0;
-  float vtreble = knobValues[5] * 20.0 - 10.0;
+  const float vgain = knobValues[0];
+  const float vlevel = knobValues[1];
+  const float vpresence = mapEqDb(knobValues[2]);
+  const float vbass = mapEqDb(knobValues[3]);
+  const float vmid = mapEqDb(knobValues[4]);
+  const float vtreble = mapEqDb(knobValues[5]);
 
   // Order of effects is:
   //           Autowah -> Gain -> Neural Model -> Tone ->
   //
 
   // Bass, Mid, Treble, Presence
-  filter_nam[0].config(vbass, centerFrequencyNam[0], 48000, q_nam[0]);
-  filter_nam[1].config(vmid, centerFrequencyNam[1], 48000, q_nam[1]);
-  filter_nam[2].config(vtreble, centerFrequencyNam[2], 48000, q_nam[2]);
-  filter_nam[3].config(vpresence, centerFrequencyNam[3], 48000, q_nam[3]);
+  ConfigureEq(vbass, vmid, vtreble, vpresence);
 
   float input_arr[1] = {0.0};  // Neural Net Input
 
@@ -326,18 +349,8 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
       input_arr[0] = sig * vgain;
 
-      if (silence_output) {  // Don't process while switching models, else bad
-                             // sound
-        fonepole(popReduce, setPopReduce, .0002f);
-        if (popReduce < 0.0003 && setPopReduce == 0.0) {
-          SelectModel();
-          setPopReduce = 1.0;
-        }
-        if (popReduce > 0.99 && setPopReduce == 1.0) {
-          popReduce = 1.0;
-          silence_output = false;
-        }
-      }
+      // Handle model switch gating
+      ProcessModelSwitchGate();
 
       if (setPopReduce ==
           1.0)  // If the model is finished changing, process neural net
