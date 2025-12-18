@@ -161,6 +161,34 @@ void updateSwitch3() {
   }
 }
 
+// Helper for 3-way toggle handling
+struct ThreeWayState {
+  int toggle;    // 0 = left, 1 = middle, 2 = right
+  bool changed;  // any change since previous read
+};
+
+static inline int MapThreeWay(const bool ps[2]) {
+  if (ps[0] == true)
+    return 0;
+  else if (ps[1] == true)
+    return 2;
+  else
+    return 1;
+}
+
+static ThreeWayState PollThreeWay(bool ps[2], const int pins[2]) {
+  bool anyChanged = false;
+  for (int i = 0; i < 2; ++i) {
+    bool current = hw.switches[pins[i]].Pressed();
+    if (current != ps[i]) {
+      ps[i] = current;
+      anyChanged = true;
+    }
+  }
+  ThreeWayState s{MapThreeWay(ps), anyChanged};
+  return s;
+}
+
 void UpdateButtons() {
   // (De-)Activate bypass and toggle LED when left footswitch is let go, or
   // enable/disable amp if held for greater than 1 second // Can only
@@ -178,70 +206,33 @@ void UpdateSwitches() {
   // Detect any changes in switch positions
 
   // 3-way Switch 1
-  bool changed1 = false;
-  for (int i = 0; i < 2; i++) {
-    if (hw.switches[switch1[i]].Pressed() != pswitch1[i]) {
-      pswitch1[i] = hw.switches[switch1[i]].Pressed();
-      changed1 = true;
-    }
-  }
-  if (changed1) {  // update_switches is for turning off preset
-    if (pswitch1[0] == true) {
-      toggleValues[0] = 0;
-    } else if (pswitch1[1] == true) {
-      toggleValues[0] = 2;
-    } else {
-      toggleValues[0] = 1;
-    }
+  auto s1 = PollThreeWay(pswitch1, switch1);
+  if (s1.changed) {
+    toggleValues[0] = s1.toggle;
     updateSwitch1or2();
   }
 
   // 3-way Switch 2
-  bool changed2 = false;
-  for (int i = 0; i < 2; i++) {
-    if (hw.switches[switch2[i]].Pressed() != pswitch2[i]) {
-      pswitch2[i] = hw.switches[switch2[i]].Pressed();
-      changed2 = true;
-    }
-  }
-  if (changed2) {
-    if (pswitch2[0] == true) {
-      toggleValues[1] = 0;
-    } else if (pswitch2[1] == true) {
-      toggleValues[1] = 2;
-    } else {
-      toggleValues[1] = 1;
-    }
+  auto s2 = PollThreeWay(pswitch2, switch2);
+  if (s2.changed) {
+    toggleValues[1] = s2.toggle;
     updateSwitch1or2();
   }
 
   // 3-way Switch 3
-  bool changed3 = false;
-  for (int i = 0; i < 2; i++) {
-    if (hw.switches[switch3[i]].Pressed() != pswitch3[i]) {
-      pswitch3[i] = hw.switches[switch3[i]].Pressed();
-      changed3 = true;
-    }
-  }
-  if (changed3) {
-    if (pswitch3[0] == true) {
-      toggleValues[2] = 0;
-    } else if (pswitch3[1] == true) {
-      toggleValues[2] = 2;
-    } else {
-      toggleValues[2] = 1;
-    }
+  auto s3 = PollThreeWay(pswitch3, switch3);
+  if (s3.changed) {
+    toggleValues[2] = s3.toggle;
     updateSwitch3();
   }
 
   // Dip switches
   bool changed4 = false;
   for (int i = 0; i < 4; i++) {
-    if (hw.switches[dip[i]].Pressed() != pdip[i]) {
-      pdip[i] = hw.switches[dip[i]].Pressed();
-      dipValues[i] =
-          pdip[i];  // TODO Look into consolidating logic for dipValues, pdip,
-                    // etc (this is for preset saving)
+    bool cur = hw.switches[dip[i]].Pressed();
+    if (cur != pdip[i]) {
+      pdip[i] = cur;
+      dipValues[i] = pdip[i];
       changed4 = true;
       // Action for dipswitches handled in audio callback
     }
@@ -252,6 +243,27 @@ void UpdateSwitches() {
       dipValues[i] = pdip[i];  // TODO Check logic here
     }
   }
+}
+
+// Read hardware switch positions once at startup and set toggles
+static void InitializeSwitchesFromHardware() {
+  // Seed pswitch arrays and map toggles using the same helper
+  auto s1 = PollThreeWay(pswitch1, switch1);
+  toggleValues[0] = s1.toggle;
+  auto s2 = PollThreeWay(pswitch2, switch2);
+  toggleValues[1] = s2.toggle;
+  auto s3 = PollThreeWay(pswitch3, switch3);
+  toggleValues[2] = s3.toggle;
+
+  // Initialize dips
+  for (int i = 0; i < 4; i++) {
+    pdip[i] = hw.switches[dip[i]].Pressed();
+    dipValues[i] = pdip[i];
+  }
+
+  // Apply mapped switch states
+  updateSwitch1or2();
+  updateSwitch3();
 }
 
 // This runs at a fixed rate, to prepare audio samples
@@ -375,7 +387,9 @@ int main(void) {
   pdip[3] = true;
 
   setupWeightsNam();  // in the model data nam .h file
-  // updateSwitch1or2();
+  // Read switches once so correct model is selected from startup
+  hw.ProcessDigitalControls();
+  InitializeSwitchesFromHardware();
   SelectModel();
   setPopReduce = 1.0;
   popReduce = 1.0;
