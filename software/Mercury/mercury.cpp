@@ -25,8 +25,6 @@ bool pswitch1[2], pswitch2[2], pswitch3[2], pdip[4];
 int switch1[2], switch2[2], switch3[2], dip[4];
 float nnLevelAdjust;
 
-bool eqOn = true;
-
 // Autowah
 Autowah autowah;
 bool autowah_enabled = false;
@@ -336,10 +334,8 @@ static void AudioCallback(AudioHandle::InputBuffer in,
                                  // possible speed improvement
 
       // Apply 4 band EQ
-      if (eqOn) {
-        for (uint8_t i = 0; i < NUM_FILTERS_NAM; i++) {
-          ampOut = filter_nam[i](ampOut);
-        }
+      for (uint8_t i = 0; i < NUM_FILTERS_NAM; i++) {
+        ampOut = filter_nam[i](ampOut);
       }
 
       out[0][i] = out[1][i] = ampOut * vlevel * popReduce;
