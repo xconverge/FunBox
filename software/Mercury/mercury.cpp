@@ -3,6 +3,7 @@
 #include <q/fx/biquad.hpp>
 #include <q/support/frequency.hpp>
 
+#include "crybaby.h"
 #include "daisysp.h"
 #include "funbox.h"
 #include "funbox_hardware.h"
@@ -26,15 +27,9 @@ bool pswitch1[2], pswitch2[2], pswitch3[2], pdip[4];
 int switch1[2], switch2[2], switch3[2], dip[4];
 float nnLevelAdjust;
 
-// Manual Wah (Crybaby-style): band-pass filter swept by expression
+// Manual Wah (Crybaby-style): encapsulated in CrybabyWah
 bool wah_enabled = false;
-constexpr float WAH_F_MIN = 400.0f;
-constexpr float WAH_F_MAX = 2500.0f;   // brighter toe-down per Crybaby spec
-constexpr float WAH_Q_HEEL = 0.95f;    // pronounced resonance at heel
-constexpr float WAH_Q_TOE = 0.80f;     // slightly broader at toe
-constexpr float WAH_PRE_GAIN = 1.12f;  // slight bite
-cycfi::q::bandpass_cpg wah_filter(cycfi::q::frequency{WAH_F_MIN}, 48000.0f,
-                                  WAH_Q_HEEL);
+funbox::CrybabyWah wah;
 
 float knobValues[6];
 int toggleValues[3];
@@ -334,18 +329,13 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
   float input_arr[1] = {0.0};  // Neural Net Input
 
-  // Update wah center frequency once per block from expression
+  // Update wah config from expression and drive LED2
   if (wah_enabled) {
     float vexpression = expression.Process();  // 0 heel, 1 toe
-    float t = powf(vexpression, 0.8f);         // skew to dwell more in low end
-    float f = WAH_F_MIN * powf(WAH_F_MAX / WAH_F_MIN, t);         // log sweep
-    float q = WAH_Q_TOE + (WAH_Q_HEEL - WAH_Q_TOE) * (1.0f - t);  // taper Q
-    wah_filter.config(cycfi::q::frequency{double(f)}, 48000.0f, double(q));
-    // Reflect expression amount on LED2 when wah is enabled
+    wah.configure_from_expression(vexpression, 48000.0f);
     led2.Set(vexpression);
     led2.Update();
   } else {
-    // Wah disabled: turn LED2 off
     led2.Set(0.0f);
     led2.Update();
   }
@@ -360,8 +350,7 @@ static void AudioCallback(AudioHandle::InputBuffer in,
       float sig = in[0][i];
 
       if (wah_enabled) {
-        sig = wah_filter(sig);
-        sig *= WAH_PRE_GAIN;  // pre-gain into amp
+        sig = wah.process(sig);
       }
 
       input_arr[0] = sig * vgain;
@@ -380,7 +369,7 @@ static void AudioCallback(AudioHandle::InputBuffer in,
         ampOut = filter_nam[i](ampOut);
       }
 
-      float levelComp = wah_enabled ? (1.0f / WAH_PRE_GAIN) : 1.0f;
+      float levelComp = wah_enabled ? wah.level_comp() : 1.0f;
       out[0][i] = out[1][i] = ampOut * vlevel * levelComp * popReduce;
     }
   }
@@ -430,9 +419,7 @@ int main(void) {
   filter_nam[1].config(0.0, centerFrequencyNam[1], samplerate, q_nam[1]);
   filter_nam[2].config(0.0, centerFrequencyNam[2], samplerate, q_nam[2]);
 
-  // Wah filter initial config (sample-rate fixed at 48k in filter setup)
-  wah_filter.config(cycfi::q::frequency{WAH_F_MIN}, 48000.0f,
-                    double(WAH_Q_HEEL));
+  // Wah filter is initialized via CrybabyWah default constructor
 
   gain.Init(hw.knob[Funbox::KNOB_1], 0.1f, 2.5f, Parameter::LOGARITHMIC);
   level.Init(hw.knob[Funbox::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR);
