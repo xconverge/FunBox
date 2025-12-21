@@ -29,11 +29,12 @@ float nnLevelAdjust;
 // Manual Wah (Crybaby-style): band-pass filter swept by expression
 bool wah_enabled = false;
 constexpr float WAH_F_MIN = 400.0f;
-constexpr float WAH_F_MAX = 2000.0f;
-constexpr float WAH_Q = 0.95f;
+constexpr float WAH_F_MAX = 2500.0f;   // brighter toe-down per Crybaby spec
+constexpr float WAH_Q_HEEL = 0.95f;    // pronounced resonance at heel
+constexpr float WAH_Q_TOE = 0.80f;     // slightly broader at toe
 constexpr float WAH_PRE_GAIN = 1.12f;  // slight bite
 cycfi::q::bandpass_cpg wah_filter(cycfi::q::frequency{WAH_F_MIN}, 48000.0f,
-                                  WAH_Q);
+                                  WAH_Q_HEEL);
 
 float knobValues[6];
 int toggleValues[3];
@@ -337,8 +338,9 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   if (wah_enabled) {
     float vexpression = expression.Process();  // 0 heel, 1 toe
     float t = powf(vexpression, 0.8f);         // skew to dwell more in low end
-    float f = WAH_F_MIN * powf(WAH_F_MAX / WAH_F_MIN, t);  // log sweep
-    wah_filter.config(cycfi::q::frequency{double(f)}, 48000.0f, double(WAH_Q));
+    float f = WAH_F_MIN * powf(WAH_F_MAX / WAH_F_MIN, t);         // log sweep
+    float q = WAH_Q_TOE + (WAH_Q_HEEL - WAH_Q_TOE) * (1.0f - t);  // taper Q
+    wah_filter.config(cycfi::q::frequency{double(f)}, 48000.0f, double(q));
     // Reflect expression amount on LED2 when wah is enabled
     led2.Set(vexpression);
     led2.Update();
@@ -429,7 +431,8 @@ int main(void) {
   filter_nam[2].config(0.0, centerFrequencyNam[2], samplerate, q_nam[2]);
 
   // Wah filter initial config (sample-rate fixed at 48k in filter setup)
-  wah_filter.config(cycfi::q::frequency{350.0}, 48000.0f, double(WAH_Q));
+  wah_filter.config(cycfi::q::frequency{WAH_F_MIN}, 48000.0f,
+                    double(WAH_Q_HEEL));
 
   gain.Init(hw.knob[Funbox::KNOB_1], 0.1f, 2.5f, Parameter::LOGARITHMIC);
   level.Init(hw.knob[Funbox::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR);
