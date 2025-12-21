@@ -339,6 +339,13 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     float t = powf(vexpression, 0.8f);         // skew to dwell more in low end
     float f = WAH_F_MIN * powf(WAH_F_MAX / WAH_F_MIN, t);  // log sweep
     wah_filter.config(cycfi::q::frequency{double(f)}, 48000.0f, double(WAH_Q));
+    // Reflect expression amount on LED2 when wah is enabled
+    led2.Set(vexpression);
+    led2.Update();
+  } else {
+    // Wah disabled: turn LED2 off
+    led2.Set(0.0f);
+    led2.Update();
   }
 
   for (size_t i = 0; i < size; i++) {
