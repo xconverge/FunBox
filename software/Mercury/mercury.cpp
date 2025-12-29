@@ -78,6 +78,63 @@ inline void apply_wah_from_toggle3() {
 
 DcBlock dc_in, dc_out;
 
+constexpr int MAX_BLOCK = 192;
+constexpr int K_HARM = 12;
+
+struct CoherentCanceller {
+  int N = 0;
+  float sinLUT[K_HARM][MAX_BLOCK];
+  float cosLUT[K_HARM][MAX_BLOCK];
+
+  // I/Q estimates
+  float I[K_HARM] = {0};
+  float Q[K_HARM] = {0};
+
+  // adaptation speed: smaller = narrower / less guitar impact
+  float mu = 0.001f;
+
+  void Init(int blockSize) {
+    N = blockSize;
+    // reset estimates when block size changes
+    for (int k = 0; k < K_HARM; ++k) {
+      I[k] = 0;
+      Q[k] = 0;
+    }
+
+    for (int k = 1; k < K_HARM; ++k) {
+      for (int n = 0; n < N; ++n) {
+        // exactly k cycles over one block => frequency = k * sr / N
+        float phase = 2.0f * M_PI * (float)(k * n) / (float)N;
+        sinLUT[k][n] = sinf(phase);
+        cosLUT[k][n] = cosf(phase);
+      }
+    }
+  }
+
+  inline float Process(float x, int nInBlock) {
+    float y = x;
+
+    for (int k = 1; k < K_HARM; ++k) {
+      float s = sinLUT[k][nInBlock];
+      float c = cosLUT[k][nInBlock];
+
+      // estimate on ORIGINAL x (not y)
+      float projI = x * c;
+      float projQ = x * s;
+
+      I[k] += mu * (projI - I[k]);
+      Q[k] += mu * (projQ - Q[k]);
+
+      y -= (I[k] * c + Q[k] * s);
+    }
+    return y;
+  }
+};
+
+static CoherentCanceller cancel_in;
+static CoherentCanceller cancel_out;
+static int g_lastBlockSize = 0;
+
 // ============================================================
 // Control targets (written by UI thread)
 // ============================================================
@@ -233,15 +290,20 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   for (size_t i = 0; i < size; ++i) {
     float sig = in[0][i];
 
+    // remove block-locked whine BEFORE gain/NAM
+    sig = dc_in.Process(sig);
+    sig = cancel_in.Process(sig, (int)i);
+
     if (wah_enabled) {
       sig = wah.process(sig);
     }
 
-    float namIn = dc_in.Process(sig * s_gain);
-    float yModel = nam.forward(namIn) * 0.4f * nnLevelAdjust;
+    const float namIn = sig * s_gain;
+    const float yModel = nam.forward(namIn) * 0.4f * nnLevelAdjust;
+    float y = yModel;
 
-    // crossfade to silence during model switching
-    float y = yModel * popReduce;  // popReduce goes 1→0→1
+    // clean any block-locked junk created downstream
+    y = cancel_out.Process(y, (int)i);
 
     y = eq[0](y);
     y = eq[1](y);
@@ -249,6 +311,7 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     y = eq[3](y);
     y = dc_out.Process(y);
 
+    // crossfade to silence during model switching
     out[0][i] = out[1][i] = y * s_level * popReduce;
   }
 }
@@ -261,6 +324,10 @@ int main(void) {
   EnableFTZ_DAZ();
   hw.Init(true);
   hw.SetAudioBlockSize(48);
+
+  g_lastBlockSize = hw.AudioBlockSize();
+  cancel_in.Init(g_lastBlockSize);
+  cancel_out.Init(g_lastBlockSize);
 
   setupWeightsNam();
   SelectModel();
