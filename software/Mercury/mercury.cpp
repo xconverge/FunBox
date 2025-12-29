@@ -31,7 +31,6 @@ float nnLevelAdjust;
 bool wah_enabled = false;
 funbox::CrybabyWah wah;
 
-float knobValues[6];
 int toggleValues[3];
 bool dipValues[4];
 
@@ -306,19 +305,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   UpdateSwitches();
 
   // Knob Processing ////////////////////
-  knobValues[0] = gain.Process();
-  knobValues[1] = level.Process();
-  knobValues[2] = presence.Process();
-  knobValues[3] = bass.Process();
-  knobValues[4] = mid.Process();
-  knobValues[5] = treble.Process();
-
-  const float vgain = knobValues[0];
-  const float vlevel = knobValues[1];
-  const float vpresence = mapEqDb(knobValues[2]);
-  const float vbass = mapEqDb(knobValues[3]);
-  const float vmid = mapEqDb(knobValues[4]);
-  const float vtreble = mapEqDb(knobValues[5]);
+  const float vgain = gain.Process();
+  const float vlevel = level.Process();
+  const float vpresence = mapEqDb(presence.Process());
+  const float vbass = mapEqDb(bass.Process());
+  const float vmid = mapEqDb(mid.Process());
+  const float vtreble = mapEqDb(treble.Process());
 
   // Order of effects is:
   //           Autowah -> Gain -> Neural Model -> Tone ->
@@ -360,27 +352,24 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
       if (setPopReduce ==
           1.0)  // If the model is finished changing, process neural net
+      {
         ampOut = rtneural_wavenet.forward(input_arr[0]) * 0.4 *
                  nnLevelAdjust;  // TODO Try try sending a block at a time,
                                  // possible speed improvement
+      }
 
       // Apply 4 band EQ
       for (uint8_t i = 0; i < NUM_FILTERS_NAM; i++) {
         ampOut = filter_nam[i](ampOut);
       }
 
-      float levelComp = wah_enabled ? wah.level_comp() : 1.0f;
-      out[0][i] = out[1][i] = ampOut * vlevel * levelComp * popReduce;
+      out[0][i] = out[1][i] = ampOut * vlevel * popReduce;
     }
   }
 }
 
 int main(void) {
-  float samplerate;
-
   hw.Init(true);
-  samplerate = hw.AudioSampleRate();
-
   hw.SetAudioBlockSize(48);
 
   switch1[0] = Funbox::SWITCH_1_LEFT;
@@ -415,14 +404,15 @@ int main(void) {
   setPopReduce = 1.0;
   popReduce = 1.0;
 
+  const float samplerate = hw.AudioSampleRate();
   filter_nam[0].config(0.0, centerFrequencyNam[0], samplerate, q_nam[0]);
   filter_nam[1].config(0.0, centerFrequencyNam[1], samplerate, q_nam[1]);
   filter_nam[2].config(0.0, centerFrequencyNam[2], samplerate, q_nam[2]);
 
   // Wah filter is initialized via CrybabyWah default constructor
 
-  gain.Init(hw.knob[Funbox::KNOB_1], 0.1f, 2.5f, Parameter::LOGARITHMIC);
-  level.Init(hw.knob[Funbox::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR);
+  gain.Init(hw.knob[Funbox::KNOB_1], 0.0f, 2.0f, Parameter::LOGARITHMIC);
+  level.Init(hw.knob[Funbox::KNOB_2], 0.0f, 2.0f, Parameter::LINEAR);
   presence.Init(hw.knob[Funbox::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
   bass.Init(hw.knob[Funbox::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
   mid.Init(hw.knob[Funbox::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
