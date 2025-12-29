@@ -135,6 +135,13 @@ class FunboxHardware {
   /** Initialize MIDI (Funbox addition) */
   void InitMidi();
 
+  /**
+   Set Led
+   \param ledID Led Index
+   \param bright Brightness
+ */
+  void SetLed(int ledID, float bright);
+
   /** Update Leds to values you had set. */
   void UpdateLeds();
 

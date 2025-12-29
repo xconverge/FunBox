@@ -122,6 +122,12 @@ void FunboxHardware::InitMidi() {
   midi.Init(midi_config);
 }
 
+void FunboxHardware::SetLed(int ledID, float bright) {
+  if (ledID >= 0 && ledID < LED_LAST) {
+    leds[ledID].Set(bright);
+  }
+}
+
 void FunboxHardware::UpdateLeds() {
   for (size_t i = 0; i < LED_LAST; i++) {
     leds[i].Update();
