@@ -39,6 +39,16 @@ float setPopReduce, popReduce;
 
 Led led1, led2;
 
+// Shared UI state for audio thread (updated in main loop)
+volatile float g_vgain = 1.0f;
+volatile float g_vlevel = 1.0f;
+volatile float g_vpresence_db = 0.0f;
+volatile float g_vbass_db = 0.0f;
+volatile float g_vmid_db = 0.0f;
+volatile float g_vtreble_db = 0.0f;
+volatile float g_vexpression = 0.0f;
+float prev_expression = 0.0f;
+
 struct NAMMathsProvider {
 #if RTNEURAL_USE_EIGEN
   template <typename Matrix>
@@ -297,55 +307,24 @@ static void InitializeSwitchesFromHardware() {
 // This runs at a fixed rate, to prepare audio samples
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
-  // hw.ProcessAllControls();
-  hw.ProcessAnalogControls();
-  hw.ProcessDigitalControls();
-
-  UpdateButtons();
-  UpdateSwitches();
-
-  // Knob Processing ////////////////////
-  const float vgain = gain.Process();
-  const float vlevel = level.Process();
-  const float vpresence = mapEqDb(presence.Process());
-  const float vbass = mapEqDb(bass.Process());
-  const float vmid = mapEqDb(mid.Process());
-  const float vtreble = mapEqDb(treble.Process());
-
-  // Order of effects is:
-  //           Autowah -> Gain -> Neural Model -> Tone ->
-  //
-
-  // Bass, Mid, Treble, Presence
-  ConfigureEq(vbass, vmid, vtreble, vpresence);
-
-  float input_arr[1] = {0.0};  // Neural Net Input
-
-  // Update wah config from expression and drive LED2
-  if (wah_enabled) {
-    float vexpression = expression.Process();  // 0 heel, 1 toe
-    wah.configure_from_expression(vexpression, 48000.0f);
-    led2.Set(vexpression);
-    led2.Update();
-  } else {
-    led2.Set(0.0f);
-    led2.Update();
-  }
-
   for (size_t i = 0; i < size; i++) {
+    const float inputLeft = in[0][i];
+    const float inputRight = in[1][i];
+    float input_arr[1] = {0.0};  // Neural Net Input
+
     // Process your signal here
     if (bypass) {
-      out[0][i] = in[0][i];
-      out[1][i] = in[0][i];
+      out[0][i] = inputLeft;
+      out[1][i] = inputRight;
     } else {
       float ampOut = 0.0;
-      float sig = in[0][i];
+      float sig = inputLeft;
 
       if (wah_enabled) {
         sig = wah.process(sig);
       }
 
-      input_arr[0] = sig * vgain;
+      input_arr[0] = sig * g_vgain;
 
       // Handle model switch gating
       ProcessModelSwitchGate();
@@ -363,7 +342,7 @@ static void AudioCallback(AudioHandle::InputBuffer in,
         ampOut = filter_nam[i](ampOut);
       }
 
-      out[0][i] = out[1][i] = ampOut * vlevel * popReduce;
+      out[0][i] = out[1][i] = ampOut * g_vlevel * popReduce;
     }
   }
 }
@@ -409,17 +388,13 @@ int main(void) {
   filter_nam[1].config(0.0, centerFrequencyNam[1], samplerate, q_nam[1]);
   filter_nam[2].config(0.0, centerFrequencyNam[2], samplerate, q_nam[2]);
 
-  // Wah filter is initialized via CrybabyWah default constructor
-
-  gain.Init(hw.knob[Funbox::KNOB_1], 0.0f, 2.0f, Parameter::LOGARITHMIC);
+  gain.Init(hw.knob[Funbox::KNOB_1], 0.1f, 2.0f, Parameter::LOGARITHMIC);
   level.Init(hw.knob[Funbox::KNOB_2], 0.0f, 2.0f, Parameter::LINEAR);
   presence.Init(hw.knob[Funbox::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
   bass.Init(hw.knob[Funbox::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
   mid.Init(hw.knob[Funbox::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
   treble.Init(hw.knob[Funbox::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
-  expression.Init(hw.expression, 0.0f, 1.0f,
-                  Parameter::LINEAR);  // TODO Make sure this is the correct way
-                                       // to reference expression
+  expression.Init(hw.expression, 0.0f, 1.0f, Parameter::LINEAR);
 
   // Init the LEDs and set activate bypass
   led1.Init(hw.seed.GetPin(Funbox::LED_1), false);
@@ -433,6 +408,44 @@ int main(void) {
   hw.StartAudio(AudioCallback);
 
   while (1) {
-    System::Delay(100);
+    // Poll controls and update UI at ~1ms cadence
+    hw.ProcessAnalogControls();
+    hw.ProcessDigitalControls();
+
+    UpdateButtons();
+    UpdateSwitches();
+
+    // Knob processing (smoothed) and EQ configuration
+    const float vgain = gain.Process();
+    const float vlevel = level.Process();
+    const float vpresence = mapEqDb(presence.Process());
+    const float vbass = mapEqDb(bass.Process());
+    const float vmid = mapEqDb(mid.Process());
+    const float vtreble = mapEqDb(treble.Process());
+
+    g_vgain = vgain;
+    g_vlevel = vlevel;
+    g_vpresence_db = vpresence;
+    g_vbass_db = vbass;
+    g_vmid_db = vmid;
+    g_vtreble_db = vtreble;
+
+    ConfigureEq(vbass, vmid, vtreble, vpresence);
+
+    // Wah configuration and LED2 brightness from expression
+    if (wah_enabled) {
+      float vexpression = expression.Process();
+      g_vexpression = vexpression;
+      if (knobMoved(prev_expression, vexpression)) {
+        wah.configure_from_expression(vexpression, hw.AudioSampleRate());
+        prev_expression = vexpression;
+      }
+      led2.Set(vexpression);
+    } else {
+      led2.Set(0.0f);
+    }
+    led2.Update();
+
+    System::Delay(1);
   }
 }
