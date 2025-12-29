@@ -39,26 +39,11 @@ class FunboxHardware {
     KNOB_LAST, /**< & */
   };
 
-  /** Leds in ringled */
-  enum RingLed {
-    RING_LED_1,   /**< & */
-    RING_LED_2,   /**< & */
-    RING_LED_3,   /**< & */
-    RING_LED_4,   /**< & */
-    RING_LED_5,   /**< & */
-    RING_LED_6,   /**< & */
-    RING_LED_7,   /**< & */
-    RING_LED_8,   /**< & */
-    RING_LED_LAST /**< & */
-  };
-
-  /** footswitch leds */
-  enum FootswitchLed {
-    FOOTSWITCH_LED_1,    /**< & */
-    FOOTSWITCH_LED_2,    /**< & */
-    FOOTSWITCH_LED_3,    /**< & */
-    FOOTSWITCH_LED_4,    /**< & */
-    FOOTSWITCH_LED_LAST, /**< & */
+  /** LEDs */
+  enum LED {
+    LED_FS1,
+    LED_FS2,
+    LED_LAST,
   };
 
   /** Constructor */
@@ -150,50 +135,25 @@ class FunboxHardware {
   /** Initialize MIDI (Funbox addition) */
   void InitMidi();
 
-  /** Turn all leds off */
-  void ClearLeds();
-
   /** Update Leds to values you had set. */
   void UpdateLeds();
 
-  /**
-     Set ring LED colors
-     \param idx Index to set
-     \param r Red value
-     \param g Green value
-     \param b Blue value
-   */
-  void SetRingLed(RingLed idx, float r, float g, float b);
+  DaisySeed seed;
 
-  /**
-     Set footswitch LED
-     \param idx Led Index
-     \param bright Brightness
-   */
-  void SetFootswitchLed(FootswitchLed idx, float bright);
-
-  DaisySeed seed;  /**< & */
-  Encoder encoder; /**< & */
-
-  AnalogControl knob[KNOB_LAST]; /**< & */
-  AnalogControl expression;      /**< & */
-  Switch switches[SW_LAST] /**< & */;
-
-  RgbLed ring_led[8];    /**< & */
-  Led footswitch_led[4]; /**< & */
+  AnalogControl knob[KNOB_LAST];
+  AnalogControl expression;
+  Switch switches[SW_LAST];
+  Led leds[LED_LAST];
 
   MidiUartHandler midi;
 
  private:
   void SetHidUpdateRates();
   void InitSwitches();
-  void InitEncoder();
   void InitLeds();
   void InitAnalogControls();
 
   inline uint16_t* adc_ptr(const uint8_t chn) { return seed.adc.GetPtr(chn); }
-
-  LedDriverPca9685<2, true> led_driver_;
 };
 
 }  // namespace daisy
