@@ -112,11 +112,13 @@ constexpr float EQ_DB_OFFSET = -10.0f;
 
 inline float mapEqDb(float v) { return v * EQ_DB_RANGE + EQ_DB_OFFSET; }
 
-inline float tiny_noise() {
-  static uint32_t seed = 0x12345678;
-  seed = seed * 1664525 + 1013904223;
-  float n = ((seed >> 9) & 0x7FFFFF) * (1.0f / 8388608.0f);
-  return (n - 0.5f) * 2.0f * 1e-7f;  // bipolar
+static inline void EnableFTZ_DAZ() {
+  // Set FZ (bit 24) and DN (bit 25) in FPSCR
+  uint32_t fpscr;
+  asm volatile("VMRS %0, fpscr" : "=r"(fpscr));
+  fpscr |= (1u << 24);  // FZ
+  fpscr |= (1u << 25);  // DN
+  asm volatile("VMSR fpscr, %0" : : "r"(fpscr));
 }
 
 const float eq_freqs[NUM_FILTERS] = {180.f, 1200.f, 4000.f, 8000.f};
@@ -173,75 +175,81 @@ void SelectModel() {
 
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
-  const float block_noise = tiny_noise();
-
-  for (size_t i = 0; i < size; i++) {
-    float sig = in[0][i];
-
-    if (bypass) {
+  if (bypass) {
+    for (size_t i = 0; i < size; ++i) {
       out[0][i] = in[0][i];
       out[1][i] = in[1][i];
-      continue;
     }
+    return;
+  }
 
-    // ===============================
-    // Smooth all parameters (CRITICAL)
-    // ===============================
+  if (silence_output) {
+    const float sr = hw.AudioSampleRate();
+    const float tau = 0.010f;  // 10 ms fade (adjust)
+    const float a_gate = 1.0f - expf(-(float)size / (tau * sr));
 
-    fonepole(s_gain, t_gain, 0.001f);
-    fonepole(s_level, t_level, 0.001f);
-    fonepole(s_bass_db, t_bass_db, 0.001f);
-    fonepole(s_mid_db, t_mid_db, 0.001f);
-    fonepole(s_treble_db, t_treble_db, 0.001f);
-    fonepole(s_presence_db, t_presence_db, 0.001f);
-    fonepole(s_expression, t_expression, 0.001f);
+    popReduce += a_gate * (setPopReduce - popReduce);
 
-    // Wah
+    if (popReduce < 0.0003f && setPopReduce == 0.0f) {
+      SelectModel();
+      setPopReduce = 1.0f;
+    }
+    if (popReduce > 0.99f && setPopReduce == 1.0f) {
+      popReduce = 1.0f;
+      silence_output = false;
+    }
+  }
+
+  const float g = t_gain;
+  const float lv = t_level;
+  const float b = t_bass_db;
+  const float m = t_mid_db;
+  const float tr = t_treble_db;
+  const float pr = t_presence_db;
+
+  // block-invariant smoothing coefficient (pick tau you like)
+  const float sr = hw.AudioSampleRate();
+  const float tau = 0.02f;  // 20 ms
+  const float a = 1.0f - expf(-(float)size / (tau * sr));
+
+  s_gain += a * (g - s_gain);
+  s_level += a * (lv - s_level);
+  s_bass_db += a * (b - s_bass_db);
+  s_mid_db += a * (m - s_mid_db);
+  s_treble_db += a * (tr - s_treble_db);
+  s_presence_db += a * (pr - s_presence_db);
+
+  // update EQ coeffs ONCE per block
+  static float last[NUM_FILTERS] = {0, 0, 0, 0};
+  float cur[NUM_FILTERS] = {s_bass_db, s_mid_db, s_treble_db, s_presence_db};
+  for (int f = 0; f < NUM_FILTERS; ++f) {
+    if (fabsf(cur[f] - last[f]) > 0.01f) {
+      eq[f].config(cur[f], eq_freqs[f], sr, eq_q[f]);
+      last[f] = cur[f];
+    }
+  }
+
+  // now do only signal processing per sample
+  for (size_t i = 0; i < size; ++i) {
+    float sig = in[0][i];
+
     if (wah_enabled) {
       sig = wah.process(sig);
     }
 
-    // Model switching gate
-    if (silence_output) {
-      fonepole(popReduce, setPopReduce, 0.0002f);
-      if (popReduce < 0.0003f && setPopReduce == 0.0f) {
-        SelectModel();
-        setPopReduce = 1.0f;
-      }
-      if (popReduce > 0.99f && setPopReduce == 1.0f) {
-        popReduce = 1.0f;
-        silence_output = false;
-      }
-    }
+    float namIn = dc_in.Process(sig * s_gain);
+    float yModel = nam.forward(namIn) * 0.4f * nnLevelAdjust;
 
-    float ampOut = 0.f;
-    if (setPopReduce == 1.0f) {
-      float namIn = sig * s_gain;
-      namIn += tiny_noise();
-      namIn += block_noise;
+    // crossfade to silence during model switching
+    float y = yModel * popReduce;  // popReduce goes 1→0→1
 
-      namIn = dc_in.Process(namIn);
+    y = eq[0](y);
+    y = eq[1](y);
+    y = eq[2](y);
+    y = eq[3](y);
+    y = dc_out.Process(y);
 
-      ampOut = nam.forward(namIn) * 0.4f * nnLevelAdjust;
-    }
-
-    // Update EQ only when smoothed values drift
-    static float last[NUM_FILTERS] = {};
-    float cur[NUM_FILTERS] = {s_bass_db, s_mid_db, s_treble_db, s_presence_db};
-
-    for (int f = 0; f < NUM_FILTERS; f++) {
-      if (fabsf(cur[f] - last[f]) > 0.01f) {
-        eq[f].config(cur[f], eq_freqs[f], hw.AudioSampleRate(), eq_q[f]);
-        last[f] = cur[f];
-      }
-      ampOut = eq[f](ampOut);
-    }
-
-    ampOut = zap_denorm(ampOut);
-
-    ampOut = dc_out.Process(ampOut);
-
-    out[0][i] = out[1][i] = ampOut * s_level * popReduce;
+    out[0][i] = out[1][i] = y * s_level * popReduce;
   }
 }
 
@@ -250,11 +258,15 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 // ============================================================
 
 int main(void) {
+  EnableFTZ_DAZ();
   hw.Init(true);
   hw.SetAudioBlockSize(48);
 
   setupWeightsNam();
   SelectModel();
+  silence_output = false;
+  popReduce = 1.0f;
+  setPopReduce = 1.0f;
 
   gain.Init(hw.knob[FunboxHardware::KNOB_1], 0.1f, 2.5f, Parameter::LINEAR);
   level.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 2.0f, Parameter::LINEAR);
