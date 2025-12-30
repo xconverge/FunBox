@@ -22,10 +22,10 @@ constexpr Pin SW_12_PIN =
 // Knobs
 constexpr Pin PIN_EXPRESSION = seed::D15;
 constexpr Pin PIN_KNOB_1 = seed::D16;
-constexpr Pin PIN_KNOB_2 = seed::D19;
-constexpr Pin PIN_KNOB_3 = seed::D17;
-constexpr Pin PIN_KNOB_4 = seed::D20;
-constexpr Pin PIN_KNOB_5 = seed::D18;
+constexpr Pin PIN_KNOB_2 = seed::D17;
+constexpr Pin PIN_KNOB_3 = seed::D18;
+constexpr Pin PIN_KNOB_4 = seed::D19;
+constexpr Pin PIN_KNOB_5 = seed::D20;
 constexpr Pin PIN_KNOB_6 = seed::D21;
 
 // LEDs
