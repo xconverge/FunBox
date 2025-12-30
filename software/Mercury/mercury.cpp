@@ -169,17 +169,8 @@ constexpr float EQ_DB_OFFSET = -10.0f;
 
 inline float mapEqDb(float v) { return v * EQ_DB_RANGE + EQ_DB_OFFSET; }
 
-static inline void EnableFTZ_DAZ() {
-  // Set FZ (bit 24) and DN (bit 25) in FPSCR
-  uint32_t fpscr;
-  asm volatile("VMRS %0, fpscr" : "=r"(fpscr));
-  fpscr |= (1u << 24);  // FZ
-  fpscr |= (1u << 25);  // DN
-  asm volatile("VMSR fpscr, %0" : : "r"(fpscr));
-}
-
-const float eq_freqs[NUM_FILTERS] = {180.f, 1200.f, 4000.f, 8000.f};
-const float eq_q[NUM_FILTERS] = {0.7f, 0.6f, 0.5f, 0.5f};
+const float eq_freqs[NUM_FILTERS] = {110.f, 900.f, 4000.f, 8000.f};
+const float eq_q[NUM_FILTERS] = {0.7f, 0.7f, 0.7f, 0.7f};
 
 cycfi::q::peaking eq[NUM_FILTERS] = {{0, eq_freqs[0], 48000, eq_q[0]},
                                      {0, eq_freqs[1], 48000, eq_q[1]},
@@ -214,8 +205,6 @@ wavenet::Wavenet_Model<float, 1,
 // ============================================================
 // Helpers
 // ============================================================
-
-inline float zap_denorm(float x) { return (fabsf(x) < 1e-20f) ? 0.f : x; }
 
 void SelectModel() {
   if (m_currentModelindex != modelIndex) {
@@ -321,7 +310,6 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 // ============================================================
 
 int main(void) {
-  EnableFTZ_DAZ();
   hw.Init(true);
   hw.SetAudioBlockSize(48);
 
@@ -335,7 +323,7 @@ int main(void) {
   popReduce = 1.0f;
   setPopReduce = 1.0f;
 
-  gain.Init(hw.knob[FunboxHardware::KNOB_1], 0.1f, 2.5f, Parameter::LINEAR);
+  gain.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 2.0f, Parameter::LINEAR);
   level.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 2.0f, Parameter::LINEAR);
   presence.Init(hw.knob[FunboxHardware::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
   bass.Init(hw.knob[FunboxHardware::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
@@ -353,8 +341,8 @@ int main(void) {
     hw.ProcessAnalogControls();
     hw.ProcessDigitalControls();
 
-    // Footswitch handling: toggle bypass on FS1
-    if (hw.switches[FunboxHardware::SW_1].FallingEdge()) {
+    // Footswitch handling: toggle bypass on FS2
+    if (hw.switches[FunboxHardware::SW_2].FallingEdge()) {
       bypass = !bypass;
     }
 
@@ -387,8 +375,8 @@ int main(void) {
     t_treble_db = mapEqDb(treble.Process());
     t_expression = expression.Process();
 
-    hw.SetLed(FunboxHardware::LED_FS1, bypass ? 0.0f : 1.0f);
-    hw.SetLed(FunboxHardware::LED_FS2, wah_enabled ? t_expression : 0.0f);
+    hw.SetLed(FunboxHardware::LED_FS2, bypass ? 0.0f : 1.0f);
+    hw.SetLed(FunboxHardware::LED_FS1, wah_enabled ? t_expression : 0.0f);
 
     hw.UpdateLeds();
 
