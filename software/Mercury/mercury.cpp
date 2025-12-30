@@ -91,7 +91,12 @@ struct CoherentCanceller {
   float Q[K_HARM] = {0};
 
   // adaptation speed: smaller = narrower / less guitar impact
-  float mu = 0.001f;
+  float mu_base = 0.001f;
+
+  // control
+  float mix = 1.0f;
+  float weight[K_HARM] = {0};
+  float gate[K_HARM] = {0};
 
   void Init(int blockSize) {
     N = blockSize;
@@ -99,6 +104,10 @@ struct CoherentCanceller {
     for (int k = 0; k < K_HARM; ++k) {
       I[k] = 0;
       Q[k] = 0;
+    }
+    for (int k = 0; k < K_HARM; ++k) {
+      weight[k] = 1.0f;
+      gate[k] = 0.0f;
     }
 
     for (int k = 1; k < K_HARM; ++k) {
@@ -111,23 +120,41 @@ struct CoherentCanceller {
     }
   }
 
+  inline void SetMix(float m) { mix = m; }
+  inline void SetWeight(int k, float w) {
+    if (k > 0 && k < K_HARM) weight[k] = w;
+  }
+  inline void SetGate(int k, float g) {
+    if (k > 0 && k < K_HARM) gate[k] = g;
+  }
+  inline void SetMuBase(float m) { mu_base = m; }
+
   inline float Process(float x, int nInBlock) {
     float y = x;
 
     for (int k = 1; k < K_HARM; ++k) {
-      float s = sinLUT[k][nInBlock];
-      float c = cosLUT[k][nInBlock];
+      float ss = sinLUT[k][nInBlock];
+      float cc = cosLUT[k][nInBlock];
 
       // estimate on ORIGINAL x (not y)
-      float projI = x * c;
-      float projQ = x * s;
+      float projI = x * cc;
+      float projQ = x * ss;
 
-      I[k] += mu * (projI - I[k]);
-      Q[k] += mu * (projQ - Q[k]);
+      float mu_k = mu_base / (1.0f + 0.5f * (float)k);
+      I[k] += mu_k * (projI - I[k]);
+      Q[k] += mu_k * (projQ - Q[k]);
 
-      y -= (I[k] * c + Q[k] * s);
+      float A = sqrtf(I[k] * I[k] + Q[k] * Q[k]);
+      float gf = 1.0f;
+      if (gate[k] > 0.0f) {
+        gf = (A - gate[k]) / gate[k];
+        if (gf < 0.0f) gf = 0.0f;
+        if (gf > 1.0f) gf = 1.0f;
+      }
+      float strength = weight[k] * gf;
+      y -= strength * (I[k] * cc + Q[k] * ss);
     }
-    return y;
+    return mix * y + (1.0f - mix) * x;
   }
 };
 
@@ -221,6 +248,11 @@ void SelectModel() {
 
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
+  if ((int)hw.AudioBlockSize() != g_lastBlockSize) {
+    g_lastBlockSize = hw.AudioBlockSize();
+    cancel_in.Init(g_lastBlockSize);
+    cancel_out.Init(g_lastBlockSize);
+  }
   if (bypass) {
     for (size_t i = 0; i < size; ++i) {
       out[0][i] = in[0][i];
@@ -316,6 +348,24 @@ int main(void) {
   g_lastBlockSize = hw.AudioBlockSize();
   cancel_in.Init(g_lastBlockSize);
   cancel_out.Init(g_lastBlockSize);
+
+  // Strengthen cancellation for the 1–5 kHz bands; remove gating.
+  cancel_in.SetMix(1.0f);
+  cancel_out.SetMix(1.0f);
+  cancel_in.SetMuBase(0.003f);
+  cancel_out.SetMuBase(0.003f);
+  for (int k = 1; k <= 5; ++k) {
+    cancel_in.SetWeight(k, 1.0f);
+    cancel_out.SetWeight(k, 1.0f);
+    cancel_in.SetGate(k, 0.0f);
+    cancel_out.SetGate(k, 0.0f);
+  }
+  for (int k = 6; k < K_HARM; ++k) {
+    cancel_in.SetWeight(k, 0.8f);
+    cancel_out.SetWeight(k, 0.8f);
+    cancel_in.SetGate(k, 0.0f);
+    cancel_out.SetGate(k, 0.0f);
+  }
 
   setupWeightsNam();
   SelectModel();
