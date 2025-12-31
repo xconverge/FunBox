@@ -1,7 +1,11 @@
 #include <RTNeural/RTNeural.h>
 
+#include <cmath>
 #include <q/fx/biquad.hpp>
+#include <q/fx/dynamic.hpp>
+#include <q/fx/envelope.hpp>
 #include <q/support/frequency.hpp>
+#include <q/support/literals.hpp>
 
 #include "crybaby.h"
 #include "daisysp.h"
@@ -12,6 +16,7 @@
 using namespace funbox;
 using namespace daisy;
 using namespace daisysp;
+using namespace cycfi::q::literals;
 
 // ============================================================
 // Hardware + UI
@@ -20,7 +25,7 @@ using namespace daisysp;
 FunboxHardware hw;
 Parameter gain, level, presence, bass, mid, treble, expression;
 
-bool bypass = true;
+bool bypass_nam = true;
 
 // ============================================================
 // Model / DSP
@@ -37,6 +42,12 @@ float setPopReduce = 1.0f;
 // Wah
 bool wah_enabled = false;
 CrybabyWah wah;
+// Q library envelope followers and AGC for consistent wah loudness
+static cycfi::q::fast_rms_envelope_follower_db wah_env_pre{10_ms, 48000.0f};
+static cycfi::q::fast_rms_envelope_follower_db wah_env_post{10_ms, 48000.0f};
+static cycfi::q::agc wah_agc{12.0_dB};
+constexpr float WAH_AGC_ALPHA = 0.2f;  // smoothing for gain application
+static float wah_agc_lin = 1.0f;
 
 // ============================================================
 // Toggle state
@@ -49,9 +60,8 @@ inline int map_three_way(bool left_pressed, bool right_pressed) {
   return 1;
 }
 
-static int t_toggle1 = 1;  // default middle
-static int t_toggle2 = 1;  // default middle
-static int t_toggle3 = 1;  // default middle
+int t_toggle1 = 1;
+int t_toggle2 = 1;
 
 inline void apply_model_selection_from_toggles() {
   int idx = 0;
@@ -69,11 +79,6 @@ inline void apply_model_selection_from_toggles() {
     popReduce = 1.0f;
     setPopReduce = 0.0f;
   }
-}
-
-inline void apply_wah_from_toggle3() {
-  // Right enables wah, left/middle disables
-  wah_enabled = (t_toggle3 == 2);
 }
 
 DcBlock dc_in, dc_out;
@@ -185,6 +190,8 @@ float s_mid_db = 0.0f;
 float s_treble_db = 0.0f;
 float s_presence_db = 0.0f;
 float s_expression = 0.0f;
+// LED smoothing for expression-driven brightness
+float s_led_expression = 0.0f;
 
 // ============================================================
 // EQ
@@ -253,7 +260,9 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     cancel_in.Init(g_lastBlockSize);
     cancel_out.Init(g_lastBlockSize);
   }
-  if (bypass) {
+
+  // Early dry pass-through: if NAM is bypassed and wah is disabled
+  if (bypass_nam && !wah_enabled) {
     for (size_t i = 0; i < size; ++i) {
       out[0][i] = in[0][i];
       out[1][i] = in[1][i];
@@ -284,6 +293,7 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   const float m = t_mid_db;
   const float tr = t_treble_db;
   const float pr = t_presence_db;
+  const float expr = t_expression;
 
   // block-invariant smoothing coefficient (pick tau you like)
   const float sr = hw.AudioSampleRate();
@@ -296,6 +306,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   s_mid_db += a * (m - s_mid_db);
   s_treble_db += a * (tr - s_treble_db);
   s_presence_db += a * (pr - s_presence_db);
+  s_expression += a * (expr - s_expression);
+
+  // Configure wah once per block from smoothed expression
+  if (wah_enabled) {
+    wah.configure_from_expression(s_expression, sr);
+  }
 
   // update EQ coeffs ONCE per block
   static float last[NUM_FILTERS] = {0, 0, 0, 0};
@@ -316,7 +332,22 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     sig = cancel_in.Process(sig, (int)i);
 
     if (wah_enabled) {
-      sig = wah.process(sig);
+      float pre = sig;
+      float post = wah.process(sig);
+      auto env_in_db = wah_env_pre(pre);
+      auto env_out_db = wah_env_post(post);
+      auto gain_db = wah_agc(env_out_db, env_in_db);
+      float gain_lin = cycfi::q::lin_float(gain_db) *
+                       cycfi::q::lin_float(2.0_dB);  // small bias up
+      wah_agc_lin += WAH_AGC_ALPHA * (gain_lin - wah_agc_lin);
+      sig = post * wah_agc_lin;
+    }
+
+    // Bypass NAM (and post chain): output wah signal directly
+    if (bypass_nam) {
+      out[0][i] = sig;
+      out[1][i] = sig;
+      continue;
     }
 
     const float namIn = sig * s_gain;
@@ -335,6 +366,9 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     // crossfade to silence during model switching
     out[0][i] = out[1][i] = y * s_level * popReduce;
   }
+
+  // No explicit post-block update needed; AGC gain is applied with smoothing
+  // per sample
 }
 
 // ============================================================
@@ -391,9 +425,14 @@ int main(void) {
     hw.ProcessAnalogControls();
     hw.ProcessDigitalControls();
 
-    // Footswitch handling: toggle bypass on FS2
+    // Footswitch handling: toggle NAM bypass on FS2
     if (hw.switches[FunboxHardware::SW_2].FallingEdge()) {
-      bypass = !bypass;
+      bypass_nam = !bypass_nam;
+    }
+
+    // Footswitch handling: toggle wah on FS1
+    if (hw.switches[FunboxHardware::SW_1].FallingEdge()) {
+      wah_enabled = !wah_enabled;
     }
 
     // Read 3-way toggles and apply behaviors
@@ -402,17 +441,11 @@ int main(void) {
                                  hw.switches[FunboxHardware::SW_4].Pressed());
       int new_t2 = map_three_way(hw.switches[FunboxHardware::SW_5].Pressed(),
                                  hw.switches[FunboxHardware::SW_6].Pressed());
-      int new_t3 = map_three_way(hw.switches[FunboxHardware::SW_7].Pressed(),
-                                 hw.switches[FunboxHardware::SW_8].Pressed());
 
       if (new_t1 != t_toggle1 || new_t2 != t_toggle2) {
         t_toggle1 = new_t1;
         t_toggle2 = new_t2;
         apply_model_selection_from_toggles();
-      }
-      if (new_t3 != t_toggle3) {
-        t_toggle3 = new_t3;
-        apply_wah_from_toggle3();
       }
     }
 
@@ -425,8 +458,19 @@ int main(void) {
     t_treble_db = mapEqDb(treble.Process());
     t_expression = expression.Process();
 
-    hw.SetLed(FunboxHardware::LED_FS2, bypass ? 0.0f : 1.0f);
-    hw.SetLed(FunboxHardware::LED_FS1, wah_enabled ? t_expression : 0.0f);
+    hw.SetLed(FunboxHardware::LED_FS2, bypass_nam ? 0.0f : 1.0f);
+    // Smooth, deadband, and gamma-correct the expression for LED brightness
+    {
+      const float a_led = 0.15f;     // smoothing factor for UI loop
+      const float deadband = 0.03f;  // suppress heel-down flicker
+      const float gamma = 2.2f;      // perceptual mapping for even throw
+      s_led_expression += a_led * (t_expression - s_led_expression);
+      float e = s_led_expression;
+      if (e < deadband) e = 0.0f;
+      float led_brightness = wah_enabled ? powf(e, gamma) : 0.0f;
+      if (led_brightness > 1.0f) led_brightness = 1.0f;
+      hw.SetLed(FunboxHardware::LED_FS1, led_brightness);
+    }
 
     hw.UpdateLeds();
 

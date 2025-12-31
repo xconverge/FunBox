@@ -25,8 +25,24 @@ struct CrybabyWah {
   // Configure center frequency and Q from expression (0..1)
   inline void configure_from_expression(float expression,
                                         float sampleRate = 48000.0f) {
-    float t = std::pow(expression, 1.6f);
+    // Calibrate expression range and shape for even sweep
+    const float e_min = 0.04f;    // ignore lower mechanical range
+    const float e_max = 0.96f;    // ignore upper mechanical range
+    const float heel_db = 0.03f;  // heel deadband to prevent immediate jump
+
+    float e = (expression - e_min) / (e_max - e_min);
+    if (e < 0.0f) e = 0.0f;
+    if (e > 1.0f) e = 1.0f;
+    if (e < heel_db) {
+      e = 0.0f;
+    } else {
+      e = (e - heel_db) / (1.0f - heel_db);
+    }
+
+    // Smoothstep shaping for perceptual linearity across the sweep
+    float t = e * e * (3.0f - 2.0f * e);
     t = t * 0.995f + 0.005f;
+
     float f = F_MIN * std::pow(F_MAX / F_MIN, t);
     float q = Q_TOE + (Q_HEEL - Q_TOE) * std::pow(1.0f - t, 0.55f);
     filter.config(cycfi::q::frequency{double(f)}, sampleRate, double(q));
