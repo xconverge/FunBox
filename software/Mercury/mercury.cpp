@@ -190,8 +190,6 @@ float s_mid_db = 0.0f;
 float s_treble_db = 0.0f;
 float s_presence_db = 0.0f;
 float s_expression = 0.0f;
-// LED smoothing for expression-driven brightness
-float s_led_expression = 0.0f;
 
 // ============================================================
 // EQ
@@ -413,7 +411,7 @@ int main(void) {
   bass.Init(hw.knob[FunboxHardware::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
   mid.Init(hw.knob[FunboxHardware::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
   treble.Init(hw.knob[FunboxHardware::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
-  expression.Init(hw.expression, 0.0f, 1.0f, Parameter::LINEAR);
+  expression.Init(hw.expression, 0.0f, 1.0f, Parameter::CUBE);
 
   dc_in.Init(hw.AudioSampleRate());
   dc_out.Init(hw.AudioSampleRate());
@@ -459,15 +457,12 @@ int main(void) {
     t_expression = expression.Process();
 
     hw.SetLed(FunboxHardware::LED_FS2, bypass_nam ? 0.0f : 1.0f);
-    // Smooth, deadband, and gamma-correct the expression for LED brightness
+
     {
-      const float a_led = 0.15f;     // smoothing factor for UI loop
-      const float deadband = 0.03f;  // suppress heel-down flicker
-      const float gamma = 2.2f;      // perceptual mapping for even throw
-      s_led_expression += a_led * (t_expression - s_led_expression);
-      float e = s_led_expression;
-      if (e < deadband) e = 0.0f;
-      float led_brightness = wah_enabled ? powf(e, gamma) : 0.0f;
+      float e = t_expression;
+      if (e < 0.0f) e = 0.0f;
+      if (e > 1.0f) e = 1.0f;
+      float led_brightness = wah_enabled ? e : 0.0f;
       if (led_brightness > 1.0f) led_brightness = 1.0f;
       hw.SetLed(FunboxHardware::LED_FS1, led_brightness);
     }
