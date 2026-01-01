@@ -53,24 +53,33 @@ static float wah_agc_lin = 1.0f;
 // Toggle state
 // ============================================================
 
+enum class TogglePos { Uninitialized, Left, Middle, Right };
+
 // 3-way toggle mapping: 0=left, 1=middle, 2=right
-inline int map_three_way(bool left_pressed, bool right_pressed) {
-  if (left_pressed) return 0;
-  if (right_pressed) return 2;
-  return 1;
+inline TogglePos map_three_way(bool left_pressed, bool right_pressed) {
+  if (left_pressed) return TogglePos::Left;
+  if (right_pressed) return TogglePos::Right;
+  return TogglePos::Middle;
 }
 
-int t_toggle1 = 1;
-int t_toggle2 = 1;
+TogglePos t_toggle1 = TogglePos::Uninitialized;
+TogglePos t_toggle2 = TogglePos::Uninitialized;
+TogglePos t_toggle3 = TogglePos::Uninitialized;
 
 inline void apply_model_selection_from_toggles() {
   int idx = 0;
-  if (t_toggle1 == 0) {  // low gain
-    idx = (t_toggle2 == 0) ? 0 : (t_toggle2 == 1) ? 1 : 2;
-  } else if (t_toggle1 == 1) {  // medium gain
-    idx = (t_toggle2 == 0) ? 3 : (t_toggle2 == 1) ? 4 : 5;
-  } else {  // high gain
-    idx = (t_toggle2 == 0) ? 6 : (t_toggle2 == 1) ? 7 : 8;
+  if (t_toggle1 == TogglePos::Left) {  // low gain
+    idx = (t_toggle2 == TogglePos::Left)     ? 0
+          : (t_toggle2 == TogglePos::Middle) ? 1
+                                             : 2;
+  } else if (t_toggle1 == TogglePos::Middle) {  // medium gain
+    idx = (t_toggle2 == TogglePos::Left)     ? 3
+          : (t_toggle2 == TogglePos::Middle) ? 4
+                                             : 5;
+  } else {  // high gain (TogglePos::Right)
+    idx = (t_toggle2 == TogglePos::Left)     ? 6
+          : (t_toggle2 == TogglePos::Middle) ? 7
+                                             : 8;
   }
   if (idx != modelIndex) {
     modelIndex = idx;
@@ -435,15 +444,30 @@ int main(void) {
 
     // Read 3-way toggles and apply behaviors
     {
-      int new_t1 = map_three_way(hw.switches[FunboxHardware::SW_3].Pressed(),
-                                 hw.switches[FunboxHardware::SW_4].Pressed());
-      int new_t2 = map_three_way(hw.switches[FunboxHardware::SW_5].Pressed(),
-                                 hw.switches[FunboxHardware::SW_6].Pressed());
+      TogglePos new_t1 =
+          map_three_way(hw.switches[FunboxHardware::SW_3].Pressed(),
+                        hw.switches[FunboxHardware::SW_4].Pressed());
+      TogglePos new_t2 =
+          map_three_way(hw.switches[FunboxHardware::SW_5].Pressed(),
+                        hw.switches[FunboxHardware::SW_6].Pressed());
+      TogglePos new_t3 =
+          map_three_way(hw.switches[FunboxHardware::SW_7].Pressed(),
+                        hw.switches[FunboxHardware::SW_8].Pressed());
 
       if (new_t1 != t_toggle1 || new_t2 != t_toggle2) {
         t_toggle1 = new_t1;
         t_toggle2 = new_t2;
         apply_model_selection_from_toggles();
+      }
+
+      // Wah preset switching on third toggle: right = Morello, else Classic
+      if (new_t3 != t_toggle3) {
+        t_toggle3 = new_t3;
+        if (t_toggle3 == TogglePos::Right) {
+          wah.SetPreset(Preset::Morello);
+        } else {
+          wah.SetPreset(Preset::Classic);
+        }
       }
     }
 
