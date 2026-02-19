@@ -90,11 +90,31 @@ cycfi::q::peaking eq[NUM_FILTERS] = {{0, eq_freqs[0], 48000, eq_q[0]},
 // Noise mitigation
 // ============================================================
 
-DcBlock dc_in, dc_out;
+DcBlock dc_in, dc_out_L, dc_out_R;
+
+// Headphone output conditioning
+cycfi::q::highpass headphone_hpf{80.0f, 48000.0f, 0.707f};
+cycfi::q::lowpass headphone_lpf{7000.0f, 48000.0f, 0.707f};
+constexpr float crossfeed_amt = 0.08f;
 
 // ============================================================
 // Audio Callback
 // ============================================================
+
+constexpr size_t kDoublerMaxDelay = 4800;  // 0.1s at 48kHz
+DelayLine<float, kDoublerMaxDelay> stereoDoubler;
+float doublerDelayMs = 20.0f;
+bool doublerEnabled = false;
+
+constexpr size_t kRoomDelay = 480;  // ~10 ms at 48kHz
+static DelayLine<float, kRoomDelay> earlyRef;
+
+inline float softlimit(float x) {
+  const float limit = 0.9f;
+  if (x > limit) return limit + (x - limit) * 0.1f;
+  if (x < -limit) return -limit + (x + limit) * 0.1f;
+  return x;
+}
 
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
@@ -136,22 +156,66 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     // IR selection
     float ir_out = mIR.Process(sig);
 
+    // Headphone EQ: HPF
+    float cab = headphone_hpf(ir_out);
+
     // EQ
-    ir_out = eq[0](ir_out);
-    ir_out = eq[1](ir_out);
-    ir_out = eq[2](ir_out);
-    ir_out = eq[3](ir_out);
+    cab = eq[0](cab);
+    cab = eq[1](cab);
+    cab = eq[2](cab);
+    cab = eq[3](cab);
 
-    // ReverbSc stereo processing (mono in)
+    // Micro room reflection (amp-in-the-room illusion)
+    if (hw.switches[FunboxHardware::SW_9].Pressed()) {
+      float early = earlyRef.Read();
+      earlyRef.Write(ir_out);  // write pre-EQ, pre-reflection signal
+      cab += 0.05f * early;
+    }
+
+    // ReverbSc stereo processing (mono in, stereo out)
     float wetL, wetR;
-    float inL = ir_out;
-    float inR = ir_out;
+    const float inL = cab;
+    const float inR = cab;
     reverb.Process(inL, inR, &wetL, &wetR);
-    float out_sample = (1.0f - s_reverb_amt) * ir_out + s_reverb_amt * wetL;
 
-    out_sample = dc_out.Process(out_sample);
+    // Darken only the wet signal
+    wetL = headphone_lpf(wetL);
+    wetR = headphone_lpf(wetR);
 
-    out[0][i] = out[1][i] = out_sample * s_level;
+    const float dryL = cab;
+    const float dryR = cab;
+    float outL = (1.0f - s_reverb_amt) * dryL + s_reverb_amt * wetL;
+    float outR = (1.0f - s_reverb_amt) * dryR + s_reverb_amt * wetR;
+
+    // Stereo doubler: add short delay to right channel if enabled
+    if (doublerEnabled) {
+      const float delayed = stereoDoubler.Read();
+      stereoDoubler.Write(outR);
+      outR = delayed;
+    }
+
+    // Crossfeed
+    constexpr float cross_mix = crossfeed_amt * 0.7f;
+    float crossL = outL + cross_mix * outR;
+    float crossR = outR + cross_mix * outL;
+    float norm = 1.0f / (1.0f + cross_mix);
+    outL = crossL * norm;
+    outR = crossR * norm;
+
+    // Basic power on fade to avoid any pop when starting the pedal
+    static float fade = 0.0f;
+    fade += (1.0f / (hw.AudioSampleRate() * 0.05f));  // 50 ms fade
+    if (fade > 1.0f) fade = 1.0f;
+
+    outL *= fade;
+    outR *= fade;
+
+    outL = softlimit(outL * s_level);
+    outR = softlimit(outR * s_level);
+
+    // DC block at output (separate for L/R)
+    out[0][i] = dc_out_L.Process(outL);
+    out[1][i] = dc_out_R.Process(outR);
   }
 }
 
@@ -173,6 +237,15 @@ int main(void) {
 
   reverb.Init(hw.AudioSampleRate());
   mIR.Init(ir_collection[m_currentIRindex]);
+  dc_in.Init(hw.AudioSampleRate());
+  dc_out_L.Init(hw.AudioSampleRate());
+  dc_out_R.Init(hw.AudioSampleRate());
+  stereoDoubler.Init();
+  stereoDoubler.SetDelay(doublerDelayMs * (hw.AudioSampleRate() / 1000.0f));
+  earlyRef.Init();
+  // Headphone output conditioning filters
+  headphone_hpf.config(80.0f, hw.AudioSampleRate(), 0.707f);
+  headphone_lpf.config(7000.0f, hw.AudioSampleRate(), 0.707f);
 
   hw.StartAdc();
   hw.StartAudio(AudioCallback);
@@ -182,26 +255,73 @@ int main(void) {
     hw.ProcessDigitalControls();
 
     // Read 3-way toggles and apply behaviors
-    {
-      TogglePos new_t1 =
-          map_three_way(hw.switches[FunboxHardware::SW_3].Pressed(),
-                        hw.switches[FunboxHardware::SW_4].Pressed());
-      if (new_t1 != t_toggle1) {
-        t_toggle1 = new_t1;
-        // Select IR
-        int ir_idx = 0;
-        if (t_toggle1 == TogglePos::Left)
-          ir_idx = 0;
-        else if (t_toggle1 == TogglePos::Middle)
-          ir_idx = 1;
-        else
-          ir_idx = 2;
-        if (ir_idx != m_currentIRindex) {
-          m_currentIRindex = ir_idx;
-          mIR.Init(ir_collection[m_currentIRindex]);
-        }
+    auto cab_freqs = [](TogglePos pos, float& hpf, float& lpf) {
+      switch (pos) {
+        case TogglePos::Left:
+          hpf = 90.0f;
+          lpf = 6500.0f;
+          break;  // 1x12 open
+        case TogglePos::Middle:
+          hpf = 70.0f;
+          lpf = 7000.0f;
+          break;  // 2x12
+        case TogglePos::Right:
+          hpf = 60.0f;
+          lpf = 5500.0f;
+          break;  // 4x12
+        default:
+          hpf = 80.0f;
+          lpf = 7000.0f;
+          break;
       }
-      // toggles 2 and 3 are unused
+    };
+
+    // Toggle 1: IR selection
+    TogglePos new_t1 =
+        map_three_way(hw.switches[FunboxHardware::SW_3].Pressed(),
+                      hw.switches[FunboxHardware::SW_4].Pressed());
+    if (new_t1 != t_toggle1) {
+      t_toggle1 = new_t1;
+      int ir_idx = 0;
+      switch (t_toggle1) {
+        case TogglePos::Left:
+          ir_idx = 0;
+          break;
+        case TogglePos::Middle:
+          ir_idx = 1;
+          break;
+        case TogglePos::Right:
+          ir_idx = 2;
+          break;
+        default:
+          ir_idx = 0;
+          break;
+      }
+      if (ir_idx != m_currentIRindex) {
+        m_currentIRindex = ir_idx;
+        mIR.Init(ir_collection[m_currentIRindex]);
+      }
+    }
+
+    // Toggle 2: Headphone cab-specific EQ
+    TogglePos new_t2 =
+        map_three_way(hw.switches[FunboxHardware::SW_5].Pressed(),
+                      hw.switches[FunboxHardware::SW_6].Pressed());
+    if (new_t2 != t_toggle2) {
+      t_toggle2 = new_t2;
+      float hpf_freq, lpf_freq;
+      cab_freqs(t_toggle2, hpf_freq, lpf_freq);
+      headphone_hpf.config(hpf_freq, hw.AudioSampleRate(), 0.707f);
+      headphone_lpf.config(lpf_freq, hw.AudioSampleRate(), 0.707f);
+    }
+
+    // Toggle 3: Doubler enable
+    TogglePos new_t3 =
+        map_three_way(hw.switches[FunboxHardware::SW_7].Pressed(),
+                      hw.switches[FunboxHardware::SW_8].Pressed());
+    if (new_t3 != t_toggle3) {
+      t_toggle3 = new_t3;
+      doublerEnabled = (t_toggle3 == TogglePos::Right);
     }
 
     // Write targets ONLY
