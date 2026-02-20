@@ -100,7 +100,7 @@ constexpr float crossfeed_amt = 0.08f;
 
 constexpr size_t kDoublerMaxDelay = 4800;  // 0.1s at 48kHz
 DelayLine<float, kDoublerMaxDelay> stereoDoubler;
-float doublerDelayMs = 10.0f;
+float doublerDelayMs = 4.0f;
 bool doublerEnabled = false;
 
 constexpr size_t kRoomDelay = 480;  // ~10 ms at 48kHz
@@ -111,6 +111,21 @@ inline float softlimit(float x) {
   if (x > limit) return limit + (x - limit) * 0.1f;
   if (x < -limit) return -limit + (x + limit) * 0.1f;
   return x;
+}
+
+void CalculateMix(const float mixAmount, float& wetMix, float& dryMix) {
+  //    A computationally cheap mostly energy constant crossfade from
+  //    SignalSmith Blog
+  //    https://signalsmith-audio.co.uk/writing/2021/cheap-energy-crossfade/
+
+  float x2 = 1.0 - mixAmount;
+  float A = mixAmount * x2;
+  float B = A * (1.0 + 1.4186 * A);
+  float C = B + mixAmount;
+  float D = B + x2;
+
+  wetMix = C * C;
+  dryMix = D * D;
 }
 
 static void AudioCallback(AudioHandle::InputBuffer in,
@@ -149,7 +164,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     sig = dc_in.Process(sig);
 
     // IR selection
-    float ir_out = mIR.Process(sig);
+    float ir_out;
+    if (hw.switches[FunboxHardware::SW_10].Pressed()) {
+      ir_out = mIR.Process(sig);
+    } else {
+      ir_out = sig;
+    }
 
     // Headphone EQ: HPF
     float cab = headphone_hpf(ir_out);
@@ -172,14 +192,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     const float inR = cab;
     reverb.Process(inL, inR, &wetL, &wetR);
 
-    // Darken only the wet signal
-    wetL = headphone_lpf(wetL);
-    wetR = headphone_lpf(wetR);
+    float dryL, dryR;
+    CalculateMix(s_reverb_amt, wetL, dryL);
+    CalculateMix(s_reverb_amt, wetR, dryR);
 
-    const float dryL = cab;
-    const float dryR = cab;
-    float outL = (1.0f - s_reverb_amt) * dryL + s_reverb_amt * wetL;
-    float outR = (1.0f - s_reverb_amt) * dryR + s_reverb_amt * wetR;
+    float outL = dryL + wetL;
+    float outR = dryR + wetR;
 
     // Stereo doubler: add short delay to right channel if enabled
     if (doublerEnabled) {
@@ -219,9 +237,9 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
 int main(void) {
   hw.Init(true);
-  hw.SetAudioBlockSize(48);
+  hw.SetAudioBlockSize(96);
 
-  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
+  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 0.4f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
                   Parameter::LINEAR);
   // Knob 3 unused
