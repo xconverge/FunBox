@@ -103,7 +103,7 @@ constexpr float crossfeed_amt = 0.08f;
 
 constexpr size_t kDoublerMaxDelay = 4800;  // 0.1s at 48kHz
 DelayLine<float, kDoublerMaxDelay> stereoDoubler;
-float doublerDelayMs = 20.0f;
+float doublerDelayMs = 10.0f;
 bool doublerEnabled = false;
 
 constexpr size_t kRoomDelay = 480;  // ~10 ms at 48kHz
@@ -227,7 +227,7 @@ int main(void) {
   hw.Init(true);
   hw.SetAudioBlockSize(48);
 
-  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 2.0f, Parameter::LINEAR);
+  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
                   Parameter::LINEAR);
   presence.Init(hw.knob[FunboxHardware::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
@@ -236,6 +236,11 @@ int main(void) {
   treble.Init(hw.knob[FunboxHardware::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
 
   reverb.Init(hw.AudioSampleRate());
+  // Set reverb feedback (decay) and lowpass frequency (damping) to subtle
+  // defaults
+  reverb.SetFeedback(0.35f);
+  reverb.SetLpFreq(4000.0f);
+
   mIR.Init(ir_collection[m_currentIRindex]);
   dc_in.Init(hw.AudioSampleRate());
   dc_out_L.Init(hw.AudioSampleRate());
