@@ -19,7 +19,7 @@ using namespace cycfi::q::literals;
 // ============================================================
 
 FunboxHardware hw;
-Parameter level, presence, bass, mid, treble, expression, reverb_amt;
+Parameter level, bass, mid, treble, expression, reverb_amt;
 
 // ============================================================
 // Model / DSP
@@ -54,7 +54,6 @@ volatile float t_level = 1.0f;
 volatile float t_bass_db = 0.0f;
 volatile float t_mid_db = 0.0f;
 volatile float t_treble_db = 0.0f;
-volatile float t_presence_db = 0.0f;
 volatile float t_reverb_amt = 0.0f;
 
 // ============================================================
@@ -65,26 +64,24 @@ float s_level = 1.0f;
 float s_bass_db = 0.0f;
 float s_mid_db = 0.0f;
 float s_treble_db = 0.0f;
-float s_presence_db = 0.0f;
 float s_reverb_amt = 0.0f;
 
 // ============================================================
 // EQ
 // ============================================================
 
-constexpr uint8_t NUM_FILTERS = 4;
+constexpr uint8_t NUM_FILTERS = 3;
 constexpr float EQ_DB_RANGE = 20.0f;
 constexpr float EQ_DB_OFFSET = -10.0f;
 
 inline float mapEqDb(float v) { return v * EQ_DB_RANGE + EQ_DB_OFFSET; }
 
-const float eq_freqs[NUM_FILTERS] = {110.f, 900.f, 4000.f, 8000.f};
-const float eq_q[NUM_FILTERS] = {0.7f, 0.7f, 0.7f, 0.7f};
+const float eq_freqs[NUM_FILTERS] = {110.f, 900.f, 4000.f};
+const float eq_q[NUM_FILTERS] = {0.7f, 0.7f, 0.7f};
 
 cycfi::q::peaking eq[NUM_FILTERS] = {{0, eq_freqs[0], 48000, eq_q[0]},
                                      {0, eq_freqs[1], 48000, eq_q[1]},
-                                     {0, eq_freqs[2], 48000, eq_q[2]},
-                                     {0, eq_freqs[3], 48000, eq_q[3]}};
+                                     {0, eq_freqs[2], 48000, eq_q[2]}};
 
 // ============================================================
 // Noise mitigation
@@ -122,7 +119,6 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   const float b = t_bass_db;
   const float m = t_mid_db;
   const float tr = t_treble_db;
-  const float pr = t_presence_db;
   const float rv = t_reverb_amt;
 
   // block-invariant smoothing coefficient (pick tau you like)
@@ -134,12 +130,11 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   s_bass_db += a * (b - s_bass_db);
   s_mid_db += a * (m - s_mid_db);
   s_treble_db += a * (tr - s_treble_db);
-  s_presence_db += a * (pr - s_presence_db);
   s_reverb_amt += a * (rv - s_reverb_amt);
 
   // update EQ coeffs ONCE per block
-  static float last[NUM_FILTERS] = {0, 0, 0, 0};
-  float cur[NUM_FILTERS] = {s_bass_db, s_mid_db, s_treble_db, s_presence_db};
+  static float last[NUM_FILTERS] = {0, 0, 0};
+  float cur[NUM_FILTERS] = {s_bass_db, s_mid_db, s_treble_db};
   for (int f = 0; f < NUM_FILTERS; ++f) {
     if (fabsf(cur[f] - last[f]) > 0.01f) {
       eq[f].config(cur[f], eq_freqs[f], sr, eq_q[f]);
@@ -163,7 +158,6 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     cab = eq[0](cab);
     cab = eq[1](cab);
     cab = eq[2](cab);
-    cab = eq[3](cab);
 
     // Micro room reflection (amp-in-the-room illusion)
     if (hw.switches[FunboxHardware::SW_9].Pressed()) {
@@ -230,7 +224,7 @@ int main(void) {
   level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
                   Parameter::LINEAR);
-  presence.Init(hw.knob[FunboxHardware::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
+  // Knob 3 unused
   bass.Init(hw.knob[FunboxHardware::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
   mid.Init(hw.knob[FunboxHardware::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
   treble.Init(hw.knob[FunboxHardware::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
@@ -331,7 +325,6 @@ int main(void) {
 
     // Write targets ONLY
     t_level = level.Process();
-    t_presence_db = mapEqDb(presence.Process());
     t_bass_db = mapEqDb(bass.Process());
     t_mid_db = mapEqDb(mid.Process());
     t_treble_db = mapEqDb(treble.Process());
