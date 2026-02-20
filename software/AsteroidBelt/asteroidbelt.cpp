@@ -28,6 +28,7 @@ Parameter level, bass, mid, treble, expression, reverb_amt;
 ReverbSc DSY_SDRAM_BSS reverb;
 ImpulseResponse mIR;
 int m_currentIRindex = 0;
+int m_desiredIRindex = 0;
 
 // ============================================================
 // Toggle state
@@ -98,6 +99,9 @@ constexpr float crossfeed_amt = 0.08f;
 // Audio Callback
 // ============================================================
 
+float sigBlock[128];
+float irBlock[128];
+
 constexpr size_t kDoublerMaxDelay = 4800;  // 0.1s at 48kHz
 DelayLine<float, kDoublerMaxDelay> stereoDoubler;
 float doublerDelayMs = 4.0f;
@@ -130,6 +134,14 @@ void CalculateMix(const float mixAmount, float& wetMix, float& dryMix) {
 
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
+  const bool ir_on = hw.switches[FunboxHardware::SW_10].Pressed();
+
+  // Update the selected IR if it has changed
+  if (m_desiredIRindex != m_currentIRindex) {
+    mIR.setImpulseResponse(ir_collection[m_desiredIRindex].data(), 1024, true);
+    m_currentIRindex = m_desiredIRindex;
+  }
+
   const float lv = t_level;
   const float b = t_bass_db;
   const float m = t_mid_db;
@@ -157,19 +169,26 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     }
   }
 
-  // now do only signal processing per sample
   for (size_t i = 0; i < size; ++i) {
-    float sig = in[0][i];
+    sigBlock[i] = dc_in.Process(in[0][i]);
+  }
 
-    sig = dc_in.Process(sig);
+  if (ir_on) {
+    mIR.processBlock(sigBlock, irBlock, size);
+  } else {
+    arm_copy_f32(sigBlock, irBlock, size);
+  }
 
-    // IR selection
-    float ir_out;
-    if (hw.switches[FunboxHardware::SW_10].Pressed()) {
-      ir_out = mIR.Process(sig);
-    } else {
-      ir_out = sig;
-    }
+  for (size_t i = 0; i < size; ++i) {
+    out[0][i] = dc_out_L.Process(irBlock[i]);
+    out[1][i] = dc_out_R.Process(irBlock[i]);
+  }
+  return;
+
+  // Now do additional processing per-sample
+  for (size_t i = 0; i < size; ++i) {
+    // Get the (possibly IR'd) signal for this sample
+    float ir_out = irBlock[i];
 
     // Headphone EQ: HPF
     float cab = headphone_hpf(ir_out);
@@ -187,17 +206,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     }
 
     // ReverbSc stereo processing (mono in, stereo out)
-    float wetL, wetR;
-    const float inL = cab;
-    const float inR = cab;
-    reverb.Process(inL, inR, &wetL, &wetR);
-
-    float dryL, dryR;
-    CalculateMix(s_reverb_amt, wetL, dryL);
-    CalculateMix(s_reverb_amt, wetR, dryR);
-
-    float outL = dryL + wetL;
-    float outR = dryR + wetR;
+    float wetSigL, wetSigR;
+    reverb.Process(cab, cab, &wetSigL, &wetSigR);
+    float wetMix, dryMix;
+    CalculateMix(s_reverb_amt, wetMix, dryMix);
+    float outL = dryMix * cab + wetMix * wetSigL;
+    float outR = dryMix * cab + wetMix * wetSigR;
 
     // Stereo doubler: add short delay to right channel if enabled
     if (doublerEnabled) {
@@ -239,7 +253,7 @@ int main(void) {
   hw.Init(true);
   hw.SetAudioBlockSize(96);
 
-  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 0.4f, Parameter::LINEAR);
+  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 2.0f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
                   Parameter::LINEAR);
   // Knob 3 unused
@@ -253,7 +267,8 @@ int main(void) {
   reverb.SetFeedback(0.35f);
   reverb.SetLpFreq(4000.0f);
 
-  mIR.Init(ir_collection[m_currentIRindex]);
+  // Initialize with first IR
+  mIR.init(ir_collection[m_currentIRindex].data(), 1024, true);
   dc_in.Init(hw.AudioSampleRate());
   dc_out_L.Init(hw.AudioSampleRate());
   dc_out_R.Init(hw.AudioSampleRate());
@@ -314,9 +329,8 @@ int main(void) {
           ir_idx = 0;
           break;
       }
-      if (ir_idx != m_currentIRindex) {
-        m_currentIRindex = ir_idx;
-        mIR.Init(ir_collection[m_currentIRindex]);
+      if (ir_idx != m_desiredIRindex) {
+        m_desiredIRindex = ir_idx;
       }
     }
 
