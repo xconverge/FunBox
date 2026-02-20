@@ -7,6 +7,7 @@
 
 #include "ImpulseResponse/ImpulseResponse.h"
 #include "ImpulseResponse/ir_data.h"
+#include "TinyReverb.h"
 #include "daisysp.h"
 #include "funbox_hardware.h"
 
@@ -25,7 +26,7 @@ Parameter level, bass, mid, treble, expression, reverb_amt;
 // Model / DSP
 // ============================================================
 
-ReverbSc DSY_SDRAM_BSS reverb;
+TinyReverb reverb;
 ImpulseResponse mIR;
 int m_currentIRindex = 0;
 int m_desiredIRindex = 0;
@@ -134,8 +135,6 @@ void CalculateMix(const float mixAmount, float& wetMix, float& dryMix) {
 
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
-  const bool ir_on = hw.switches[FunboxHardware::SW_10].Pressed();
-
   // Update the selected IR if it has changed
   if (m_desiredIRindex != m_currentIRindex) {
     mIR.setImpulseResponse(ir_collection[m_desiredIRindex].data(), 1024, true);
@@ -173,25 +172,34 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     sigBlock[i] = dc_in.Process(in[0][i]);
   }
 
+  const bool ir_on = hw.switches[FunboxHardware::SW_10].Pressed();
+  const bool room_on = hw.switches[FunboxHardware::SW_9].Pressed();
+  const bool doubler_on = doublerEnabled;
+
+  const float fade_inc = 1.0f / (hw.AudioSampleRate() * 0.05f);
+
   if (ir_on) {
     mIR.processBlock(sigBlock, irBlock, size);
   } else {
     arm_copy_f32(sigBlock, irBlock, size);
   }
 
-  for (size_t i = 0; i < size; ++i) {
-    out[0][i] = dc_out_L.Process(irBlock[i]);
-    out[1][i] = dc_out_R.Process(irBlock[i]);
+  static float lastRv = -1.0f;
+  if (fabsf(s_reverb_amt - lastRv) > 0.01f) {
+    float x = s_reverb_amt;
+    float mix = 0.05f + 0.30f * (x * x);  // 0.05..0.35
+    float fb = 0.18f + 0.14f * x;         // 0.18..0.32
+    float damp = 4200.0f - 1700.0f * x;   // 4200..2500 Hz
+    reverb.Set(mix, fb, damp);
+    lastRv = s_reverb_amt;
   }
-  return;
 
   // Now do additional processing per-sample
   for (size_t i = 0; i < size; ++i) {
-    // Get the (possibly IR'd) signal for this sample
-    float ir_out = irBlock[i];
+    // Start by using the (possibly IR'd) signal for this sample
 
     // Headphone EQ: HPF
-    float cab = headphone_hpf(ir_out);
+    float cab = headphone_hpf(irBlock[i]);
 
     // EQ
     cab = eq[0](cab);
@@ -199,25 +207,37 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     cab = eq[2](cab);
 
     // Micro room reflection (amp-in-the-room illusion)
-    if (hw.switches[FunboxHardware::SW_9].Pressed()) {
-      float early = earlyRef.Read();
-      earlyRef.Write(ir_out);  // write pre-EQ, pre-reflection signal
-      cab += 0.05f * early;
+    if (room_on) {
+      const float early = earlyRef.Read();
+      earlyRef.Write(irBlock[i]);  // write pre-EQ, pre-reflection signal
+      cab += 0.07f * early;
     }
 
     // ReverbSc stereo processing (mono in, stereo out)
-    float wetSigL, wetSigR;
-    reverb.Process(cab, cab, &wetSigL, &wetSigR);
-    float wetMix, dryMix;
-    CalculateMix(s_reverb_amt, wetMix, dryMix);
-    float outL = dryMix * cab + wetMix * wetSigL;
-    float outR = dryMix * cab + wetMix * wetSigR;
+    float wetL, wetR;
+    reverb.Process(cab, &wetL, &wetR);
+    float outL = cab + wetL;
+    float outR = cab + wetR;
 
     // Stereo doubler: add short delay to right channel if enabled
-    if (doublerEnabled) {
-      const float delayed = stereoDoubler.Read();
-      stereoDoubler.Write(outR);
-      outR = delayed;
+    if (doubler_on) {
+      // const float delayed = stereoDoubler.Read();
+      // stereoDoubler.Write(outR);
+      // outR = delayed;
+
+      const float mix = 0.25f;  // 0.15..0.35
+      const float dL = 3.5f * sr * 0.001f;
+      const float dR = 6.0f * sr * 0.001f;
+
+      // feed mono (or feed 0.5*(outL+outR) if mostly mono)
+      const float x = 0.5f * (outL + outR);
+
+      float tapL = stereoDoubler.Read(dL);
+      float tapR = stereoDoubler.Read(dR);
+      stereoDoubler.Write(x);
+
+      outL += mix * tapL;
+      outR += mix * tapR;
     }
 
     // Crossfeed
@@ -230,14 +250,11 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
     // Basic power on fade to avoid any pop when starting the pedal
     static float fade = 0.0f;
-    fade += (1.0f / (hw.AudioSampleRate() * 0.05f));  // 50 ms fade
+    fade += fade_inc;
     if (fade > 1.0f) fade = 1.0f;
 
-    outL *= fade;
-    outR *= fade;
-
-    outL = softlimit(outL * s_level);
-    outR = softlimit(outR * s_level);
+    outL = softlimit(outL * s_level * fade);
+    outR = softlimit(outR * s_level * fade);
 
     // DC block at output (separate for L/R)
     out[0][i] = dc_out_L.Process(outL);
@@ -253,7 +270,7 @@ int main(void) {
   hw.Init(true);
   hw.SetAudioBlockSize(96);
 
-  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 2.0f, Parameter::LINEAR);
+  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 6.0f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
                   Parameter::LINEAR);
   // Knob 3 unused
@@ -262,10 +279,6 @@ int main(void) {
   treble.Init(hw.knob[FunboxHardware::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
 
   reverb.Init(hw.AudioSampleRate());
-  // Set reverb feedback (decay) and lowpass frequency (damping) to subtle
-  // defaults
-  reverb.SetFeedback(0.35f);
-  reverb.SetLpFreq(4000.0f);
 
   // Initialize with first IR
   mIR.init(ir_collection[m_currentIRindex].data(), 1024, true);
