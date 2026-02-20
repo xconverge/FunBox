@@ -15,6 +15,48 @@ using namespace daisy;
 using namespace daisysp;
 using namespace cycfi::q::literals;
 
+struct DriftMod {
+  float cur = 0.0f;
+  float target = 0.0f;
+  int countdown = 0;
+  int period_samps = 1;
+  float slew_a = 0.001f;       // per-sample slew coefficient
+  uint32_t rng = 0x12345678u;  // xorshift state
+
+  // update_hz: how often to pick a new random target (e.g. 2.0 Hz)
+  // slew_ms:   smoothing time constant (e.g. 250 ms)
+  void Init(float sr, float update_hz, float slew_ms, uint32_t seed) {
+    rng = seed ? seed : 0x12345678u;
+    period_samps = (int)(sr / update_hz);
+    if (period_samps < 1) period_samps = 1;
+    countdown = period_samps;
+
+    float tau = slew_ms * 0.001f;
+    // 1st-order smoothing coefficient
+    slew_a = 1.0f - expf(-1.0f / (tau * sr));
+    cur = 0.0f;
+    target = 0.0f;
+  }
+
+  inline float RandBipolar() {
+    // xorshift32 -> [-1, +1]
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    float u = (float)rng * (1.0f / 4294967296.0f);  // [0,1)
+    return 2.0f * u - 1.0f;
+  }
+
+  inline float Process() {
+    if (--countdown <= 0) {
+      countdown = period_samps;
+      target = RandBipolar();
+    }
+    cur += slew_a * (target - cur);
+    return cur;  // ~[-1,1]
+  }
+};
+
 // ============================================================
 // Hardware + UI
 // ============================================================
@@ -92,6 +134,7 @@ cycfi::q::peaking eq[NUM_FILTERS] = {{0, eq_freqs[0], 48000, eq_q[0]},
 DcBlock dc_in, dc_out_L, dc_out_R;
 
 // Headphone output conditioning
+cycfi::q::peaking hp_presence{0.0f, 3200.0f, 48000.0f, 0.9f};
 cycfi::q::highpass headphone_hpf{80.0f, 48000.0f, 0.707f};
 cycfi::q::lowpass headphone_lpf{7000.0f, 48000.0f, 0.707f};
 constexpr float crossfeed_amt = 0.08f;
@@ -107,6 +150,7 @@ constexpr size_t kDoublerMaxDelay = 4800;  // 0.1s at 48kHz
 DelayLine<float, kDoublerMaxDelay> stereoDoubler;
 float doublerDelayMs = 4.0f;
 bool doublerEnabled = false;
+DriftMod driftL, driftR;
 
 constexpr size_t kRoomDelay = 480;  // ~10 ms at 48kHz
 static DelayLine<float, kRoomDelay> earlyRef;
@@ -197,19 +241,22 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   // Now do additional processing per-sample
   for (size_t i = 0; i < size; ++i) {
     // Start by using the (possibly IR'd) signal for this sample
-
-    // Headphone EQ: HPF
-    float cab = headphone_hpf(irBlock[i]);
+    float cab = irBlock[i];
 
     // EQ
     cab = eq[0](cab);
     cab = eq[1](cab);
     cab = eq[2](cab);
 
+    // headphone conditioning AFTER tone stack
+    cab = headphone_hpf(cab);
+    cab = headphone_lpf(cab);
+    cab = hp_presence(cab);
+
     // Micro room reflection (amp-in-the-room illusion)
     if (room_on) {
       const float early = earlyRef.Read();
-      earlyRef.Write(irBlock[i]);  // write pre-EQ, pre-reflection signal
+      earlyRef.Write(cab);
       cab += 0.07f * early;
     }
 
@@ -219,17 +266,18 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     float outL = cab + wetL;
     float outR = cab + wetR;
 
-    // Stereo doubler: add short delay to right channel if enabled
     if (doubler_on) {
-      // const float delayed = stereoDoubler.Read();
-      // stereoDoubler.Write(outR);
-      // outR = delayed;
+      const float mix = 0.28f;
+      const float baseL_ms = 8.0f;
+      const float baseR_ms = 13.0f;
+      const float depth_ms = 0.10f;  // keep SMALL (0.05..0.25 ms)
 
-      const float mix = 0.25f;  // 0.15..0.35
-      const float dL = 3.5f * sr * 0.001f;
-      const float dR = 6.0f * sr * 0.001f;
+      float modL = driftL.Process();  // -1..1
+      float modR = driftR.Process();  // -1..1
 
-      // feed mono (or feed 0.5*(outL+outR) if mostly mono)
+      float dL = (baseL_ms + depth_ms * modL) * sr * 0.001f;
+      float dR = (baseR_ms + depth_ms * modR) * sr * 0.001f;
+
       const float x = 0.5f * (outL + outR);
 
       float tapL = stereoDoubler.Read(dL);
@@ -268,9 +316,9 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
 int main(void) {
   hw.Init(true);
-  hw.SetAudioBlockSize(96);
+  hw.SetAudioBlockSize(48);
 
-  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 6.0f, Parameter::LINEAR);
+  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
                   Parameter::LINEAR);
   // Knob 3 unused
@@ -287,7 +335,12 @@ int main(void) {
   dc_out_R.Init(hw.AudioSampleRate());
   stereoDoubler.Init();
   stereoDoubler.SetDelay(doublerDelayMs * (hw.AudioSampleRate() / 1000.0f));
+  driftL.Init(hw.AudioSampleRate(), 2.0f, 250.0f,
+              0xA341316Cu);  // update 2 Hz, slew 250 ms
+  driftR.Init(hw.AudioSampleRate(), 2.3f, 280.0f,
+              0xC8013EA4u);  // slightly different
   earlyRef.Init();
+  earlyRef.SetDelay((size_t)(0.008f * hw.AudioSampleRate()));  // ~8ms
   // Headphone output conditioning filters
   headphone_hpf.config(80.0f, hw.AudioSampleRate(), 0.707f);
   headphone_lpf.config(7000.0f, hw.AudioSampleRate(), 0.707f);
@@ -357,6 +410,21 @@ int main(void) {
       cab_freqs(t_toggle2, hpf_freq, lpf_freq);
       headphone_hpf.config(hpf_freq, hw.AudioSampleRate(), 0.707f);
       headphone_lpf.config(lpf_freq, hw.AudioSampleRate(), 0.707f);
+      float pres_db = 0.0f;
+      switch (t_toggle2) {
+        case TogglePos::Left:
+          pres_db = +1.5f;
+          break;  // brighter
+        case TogglePos::Middle:
+          pres_db = 0.0f;
+          break;
+        case TogglePos::Right:
+          pres_db = -3.0f;
+          break;  // darker/smoother
+        default:
+          break;
+      }
+      hp_presence.config(pres_db, 3200.0f, hw.AudioSampleRate(), 0.9f);
     }
 
     // Toggle 3: Doubler enable
