@@ -23,7 +23,8 @@ $(CMSIS_DSP_DIR)/Source/SupportFunctions/arm_fill_f32.c \
 $(CMSIS_DSP_DIR)/Source/BasicMathFunctions/arm_scale_f32.c \
 $(CMSIS_DSP_DIR)/Source/SupportFunctions/arm_copy_f32.c
 
-CPP_SOURCES = asteroidbelt.cpp funbox_hardware.cpp ImpulseResponse/ImpulseResponse.cpp
+CPP_SOURCES = asteroidbelt.cpp funbox_hardware.cpp ImpulseResponse/ImpulseResponse.cpp \
+	Dattorro/Dattorro.cpp Dattorro/dsp/delays/InterpDelay.cpp Dattorro/dsp/filters/OnePoleFilters.cpp
 C_SOURCES += $(CMSIS_DSP_SRC)
 
 # Core location, and generic Makefile.

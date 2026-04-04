@@ -7,7 +7,7 @@
 
 #include "ImpulseResponse/ImpulseResponse.h"
 #include "ImpulseResponse/ir_data.h"
-#include "TinyReverb.h"
+#include "Dattorro/Dattorro.hpp"
 #include "daisysp.h"
 #include "funbox_hardware.h"
 
@@ -68,7 +68,7 @@ Parameter level, bass, mid, treble, expression, reverb_amt;
 // Model / DSP
 // ============================================================
 
-TinyReverb reverb;
+Dattorro reverb(48000.0f, 16.0f, 1.0f);
 ImpulseResponse mIR;
 int m_currentIRindex = 0;
 int m_desiredIRindex = 0;
@@ -231,10 +231,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   static float lastRv = -1.0f;
   if (fabsf(s_reverb_amt - lastRv) > 0.01f) {
     float x = s_reverb_amt;
-    float mix = 0.05f + 0.30f * (x * x);  // 0.05..0.35
-    float fb = 0.18f + 0.14f * x;         // 0.18..0.32
-    float damp = 4200.0f - 1700.0f * x;   // 4200..2500 Hz
-    reverb.Set(mix, fb, damp);
+    // Map reverb knob to decay (0.3..0.95) and tank damping
+    float decay = 0.3f + 0.65f * x;
+    reverb.setDecay(decay);
+    // Darken the tank as reverb increases
+    float tankHighCut = 440.0f * powf(2.0f, (7.5f - 1.5f * x) - 5.0f);
+    reverb.tank.setHighCutFrequency(tankHighCut);
     lastRv = s_reverb_amt;
   }
 
@@ -260,11 +262,12 @@ static void AudioCallback(AudioHandle::InputBuffer in,
       cab += 0.07f * early;
     }
 
-    // ReverbSc stereo processing (mono in, stereo out)
-    float wetL, wetR;
-    reverb.Process(cab, &wetL, &wetR);
-    float outL = cab + wetL;
-    float outR = cab + wetR;
+    // Dattorro plate reverb (mono in, stereo out)
+    float wetMix, dryMix;
+    CalculateMix(s_reverb_amt, wetMix, dryMix);
+    reverb.process(cab, cab);
+    float outL = dryMix * cab + wetMix * reverb.getLeftOutput();
+    float outR = dryMix * cab + wetMix * reverb.getRightOutput();
 
     if (doubler_on) {
       const float mix = 0.28f;
@@ -326,7 +329,17 @@ int main(void) {
   mid.Init(hw.knob[FunboxHardware::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
   treble.Init(hw.knob[FunboxHardware::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
 
-  reverb.Init(hw.AudioSampleRate());
+  reverb.setSampleRate(hw.AudioSampleRate());
+  reverb.setDecay(0.7f);
+  reverb.setTankDiffusion(0.7f);
+  reverb.enableInputDiffusion(true);
+  reverb.setPreDelay(0.0f);
+  reverb.setTimeScale(1.0f);
+  reverb.setTankModShape(0.5f);
+  reverb.setTankModSpeed(0.8f);
+  reverb.setTankModDepth(1.0f);
+  reverb.setTankFilterHighCutFrequency(7.0f);
+  reverb.setTankFilterLowCutFrequency(2.5f);
 
   // Initialize with first IR
   mIR.init(ir_collection[m_currentIRindex].data(), 1024, true);
