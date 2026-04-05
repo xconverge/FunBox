@@ -68,7 +68,7 @@ Parameter level, bass, mid, treble, expression, reverb_amt;
 // Model / DSP
 // ============================================================
 
-Dattorro reverb(48000.0f, 16.0f, 1.0f);
+Dattorro reverb(48000.0f, 16.0f, 4.0f);
 ImpulseResponse mIR;
 int m_currentIRindex = 0;
 int m_desiredIRindex = 0;
@@ -340,6 +340,9 @@ int main(void) {
   reverb.setTankModDepth(1.0f);
   reverb.setTankFilterHighCutFrequency(7.0f);
   reverb.setTankFilterLowCutFrequency(2.5f);
+  reverb.setInputFilterHighCutoffPitch(7.25f);
+  reverb.setInputFilterLowCutoffPitch(2.87f);
+  reverb.clear();
 
   // Initialize with first IR
   mIR.init(ir_collection[m_currentIRindex].data(), 1024, true);

@@ -124,7 +124,7 @@ void Dattorro1997Tank::setSampleRate(const float newSampleRate) {
     rescaleTapTimes();
     setTimeScale(timeScale);
     initialiseDelaysAndApfs();
-    //clear();
+    clear();
 }
 
 #pragma GCC push_options
@@ -327,6 +327,8 @@ Dattorro::Dattorro(const float initMaxSampleRate,
 
     leftInputDCBlock.setCutoffFreq(20.0);
     rightInputDCBlock.setCutoffFreq(20.0);
+
+    clear();
 }
 
 //float subApfOut = 0.;
