@@ -8,6 +8,7 @@ APP_TYPE = BOOT_SRAM
 # Compiler options
 #OPT = -O1
 OPT=-Os
+# OPT=-Og -g
 
 # Library Locations
 LIBDAISY_DIR = ../../libDaisy

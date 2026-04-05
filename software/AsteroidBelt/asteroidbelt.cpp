@@ -10,10 +10,18 @@
 #include "Dattorro/Dattorro.hpp"
 #include "daisysp.h"
 #include "funbox_hardware.h"
+#include "util/CpuLoadMeter.h"
 
 using namespace daisy;
 using namespace daisysp;
 using namespace cycfi::q::literals;
+
+constexpr int AUDIO_BLOCK_SIZE = 48;
+constexpr int IR_LENGTH = 256;
+
+// CPU load meter
+static daisy::CpuLoadMeter cpu_load_meter;
+volatile float g_cpu_load = 0.0f;
 
 struct DriftMod {
   float cur = 0.0f;
@@ -63,12 +71,11 @@ struct DriftMod {
 
 FunboxHardware hw;
 Parameter level, bass, mid, treble, expression, reverb_amt;
-
 // ============================================================
 // Model / DSP
 // ============================================================
 
-Dattorro reverb(48000.0f, 16.0f, 4.0f);
+Dattorro reverb(48000.0f, 16.0f, 1.0f);
 ImpulseResponse mIR;
 int m_currentIRindex = 0;
 int m_desiredIRindex = 0;
@@ -176,9 +183,10 @@ void CalculateMix(const float mixAmount, float& wetMix, float& dryMix) {
 
 static void AudioCallback(AudioHandle::InputBuffer in,
                           AudioHandle::OutputBuffer out, size_t size) {
+  cpu_load_meter.OnBlockStart();
   // Update the selected IR if it has changed
   if (m_desiredIRindex != m_currentIRindex) {
-    mIR.setImpulseResponse(ir_collection[m_desiredIRindex].data(), 1024, true);
+    mIR.setImpulseResponse(ir_collection[m_desiredIRindex].data(), IR_LENGTH, true);
     m_currentIRindex = m_desiredIRindex;
   }
 
@@ -300,6 +308,8 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     out[0][i] = dc_out_L.Process(outL);
     out[1][i] = dc_out_R.Process(outR);
   }
+  cpu_load_meter.OnBlockEnd();
+  g_cpu_load = cpu_load_meter.GetAvgCpuLoad();
 }
 
 // ============================================================
@@ -308,7 +318,8 @@ static void AudioCallback(AudioHandle::InputBuffer in,
 
 int main(void) {
   hw.Init(true);
-  hw.SetAudioBlockSize(48);
+  hw.SetAudioBlockSize(AUDIO_BLOCK_SIZE);
+  cpu_load_meter.Init(hw.AudioSampleRate(), AUDIO_BLOCK_SIZE);
 
   level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
   reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 1.0f,
@@ -334,7 +345,7 @@ int main(void) {
   reverb.clear();
 
   // Initialize with first IR
-  mIR.init(ir_collection[m_currentIRindex].data(), 1024, true);
+  mIR.init(ir_collection[m_currentIRindex].data(), IR_LENGTH, true);
   dc_in.Init(hw.AudioSampleRate());
   dc_out_L.Init(hw.AudioSampleRate());
   dc_out_R.Init(hw.AudioSampleRate());
