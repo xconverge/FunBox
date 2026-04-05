@@ -70,7 +70,7 @@ struct DriftMod {
 // ============================================================
 
 FunboxHardware hw;
-Parameter level, bass, mid, treble, expression, reverb_amt;
+Parameter level, bass, mid, treble, reverb_amt;
 // ============================================================
 // Model / DSP
 // ============================================================
@@ -164,21 +164,6 @@ inline float softlimit(float x) {
   if (x > limit) return limit + (x - limit) * 0.1f;
   if (x < -limit) return -limit + (x + limit) * 0.1f;
   return x;
-}
-
-void CalculateMix(const float mixAmount, float& wetMix, float& dryMix) {
-  //    A computationally cheap mostly energy constant crossfade from
-  //    SignalSmith Blog
-  //    https://signalsmith-audio.co.uk/writing/2021/cheap-energy-crossfade/
-
-  float x2 = 1.0 - mixAmount;
-  float A = mixAmount * x2;
-  float B = A * (1.0 + 1.4186 * A);
-  float C = B + mixAmount;
-  float D = B + x2;
-
-  wetMix = C * C;
-  dryMix = D * D;
 }
 
 static void AudioCallback(AudioHandle::InputBuffer in,
