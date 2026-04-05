@@ -152,9 +152,6 @@ float doublerDelayMs = 4.0f;
 bool doublerEnabled = false;
 DriftMod driftL, driftR;
 
-constexpr size_t kRoomDelay = 480;  // ~10 ms at 48kHz
-static DelayLine<float, kRoomDelay> earlyRef;
-
 inline float softlimit(float x) {
   const float limit = 0.9f;
   if (x > limit) return limit + (x - limit) * 0.1f;
@@ -217,7 +214,6 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   }
 
   const bool ir_on = hw.switches[FunboxHardware::SW_10].Pressed();
-  const bool room_on = hw.switches[FunboxHardware::SW_9].Pressed();
   const bool doubler_on = doublerEnabled;
 
   const float fade_inc = 1.0f / (hw.AudioSampleRate() * 0.05f);
@@ -254,13 +250,6 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     cab = headphone_hpf(cab);
     cab = headphone_lpf(cab);
     cab = hp_presence(cab);
-
-    // Micro room reflection (amp-in-the-room illusion)
-    if (room_on) {
-      const float early = earlyRef.Read();
-      earlyRef.Write(cab);
-      cab += 0.07f * early;
-    }
 
     // Dattorro plate reverb (mono in, stereo out)
     float wetMix, dryMix;
@@ -355,8 +344,6 @@ int main(void) {
               0xA341316Cu);  // update 2 Hz, slew 250 ms
   driftR.Init(hw.AudioSampleRate(), 2.3f, 280.0f,
               0xC8013EA4u);  // slightly different
-  earlyRef.Init();
-  earlyRef.SetDelay((size_t)(0.008f * hw.AudioSampleRate()));  // ~8ms
   // Headphone output conditioning filters
   headphone_hpf.config(80.0f, hw.AudioSampleRate(), 0.707f);
   headphone_lpf.config(7000.0f, hw.AudioSampleRate(), 0.707f);
