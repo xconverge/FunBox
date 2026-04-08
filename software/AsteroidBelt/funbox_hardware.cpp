@@ -46,7 +46,7 @@ void FunboxHardware::DelayMs(size_t del) { seed.DelayMs(del); }
 
 void FunboxHardware::SetHidUpdateRates() {
   for (size_t i = 0; i < KNOB_LAST; i++) {
-    knob[i].SetSampleRate(AudioCallbackRate());
+    knobs[i].SetSampleRate(AudioCallbackRate());
   }
   for (size_t i = 0; i < LED_LAST; i++) {
     leds[i].SetSampleRate(AudioCallbackRate());
@@ -96,15 +96,15 @@ void FunboxHardware::StopAdc() { seed.adc.Stop(); }
 
 void FunboxHardware::ProcessAnalogControls() {
   for (size_t i = 0; i < KNOB_LAST; i++) {
-    knob[i].Process();
+    knobs[i].Process();
   }
   expression.Process();
 }
 
-float FunboxHardware::GetKnobValue(Knob k) {
+float FunboxHardware::GetKnobValue(KnobsEnum k) {
   size_t idx;
   idx = k < KNOB_LAST ? k : KNOB_1;
-  return knob[idx].Value();
+  return knobs[idx].Value();
 }
 
 float FunboxHardware::GetExpression() { return expression.Value(); }
@@ -173,7 +173,7 @@ void FunboxHardware::InitAnalogControls() {
   seed.adc.Init(cfg, KNOB_LAST + 1);
   // Make an array of pointers to the knob.
   for (int i = 0; i < KNOB_LAST; i++) {
-    knob[i].Init(seed.adc.GetPtr(i), AudioCallbackRate());
+    knobs[i].Init(seed.adc.GetPtr(i), AudioCallbackRate());
   }
   expression.Init(seed.adc.GetPtr(KNOB_LAST), AudioCallbackRate());
 }

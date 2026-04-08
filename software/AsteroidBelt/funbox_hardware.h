@@ -29,7 +29,7 @@ class FunboxHardware {
   };
 
   /** Knobs */
-  enum Knob {
+  enum KnobsEnum {
     KNOB_1,    /**< & */
     KNOB_2,    /**< & */
     KNOB_3,    /**< & */
@@ -124,7 +124,7 @@ class FunboxHardware {
   \param k Which knob to get
   \return Floating point knob position.
   */
-  float GetKnobValue(Knob k);
+  float GetKnobValue(KnobsEnum k);
 
   /** & */
   float GetExpression();
@@ -147,7 +147,7 @@ class FunboxHardware {
 
   DaisySeed seed;
 
-  AnalogControl knob[KNOB_LAST];
+  AnalogControl knobs[KNOB_LAST];
   AnalogControl expression;
   Switch switches[SW_LAST];
   Led leds[LED_LAST];

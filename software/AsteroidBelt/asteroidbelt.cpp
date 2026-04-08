@@ -9,7 +9,36 @@
 #include "ImpulseResponse/ir_data.h"
 #include "Dattorro/Dattorro.hpp"
 #include "daisysp.h"
+#define USE_HOTHOUSE_HARDWARE
+#ifdef USE_HOTHOUSE_HARDWARE
+#include "hothouse_hardware.h"
+using HardwareType = clevelandmusicco::Hothouse;
+constexpr int SWITCH_1_POS1 = clevelandmusicco::Hothouse::SWITCH_1_UP;
+constexpr int SWITCH_1_POS3 = clevelandmusicco::Hothouse::SWITCH_1_DOWN;
+constexpr int SWITCH_2_POS1 = clevelandmusicco::Hothouse::SWITCH_2_UP;
+constexpr int SWITCH_2_POS3 = clevelandmusicco::Hothouse::SWITCH_2_DOWN;
+constexpr int SWITCH_3_POS1 = clevelandmusicco::Hothouse::SWITCH_3_UP;
+constexpr int SWITCH_3_POS3 = clevelandmusicco::Hothouse::SWITCH_3_DOWN;
+constexpr int KNOB_1 = clevelandmusicco::Hothouse::KNOB_1;
+constexpr int KNOB_2 = clevelandmusicco::Hothouse::KNOB_2;
+constexpr int KNOB_4 = clevelandmusicco::Hothouse::KNOB_4;
+constexpr int KNOB_5 = clevelandmusicco::Hothouse::KNOB_5;
+constexpr int KNOB_6 = clevelandmusicco::Hothouse::KNOB_6;
+#else
 #include "funbox_hardware.h"
+using HardwareType = daisy::FunboxHardware;
+constexpr int SWITCH_1_POS1 = daisy::FunboxHardware::SW_3;
+constexpr int SWITCH_1_POS3 = daisy::FunboxHardware::SW_4;
+constexpr int SWITCH_2_POS1 = daisy::FunboxHardware::SW_5;
+constexpr int SWITCH_2_POS3 = daisy::FunboxHardware::SW_6;
+constexpr int SWITCH_3_POS1 = daisy::FunboxHardware::SW_7;
+constexpr int SWITCH_3_POS3 = daisy::FunboxHardware::SW_8;
+constexpr int KNOB_1 = daisy::FunboxHardware::KNOB_1;
+constexpr int KNOB_2 = daisy::FunboxHardware::KNOB_2;
+constexpr int KNOB_4 = daisy::FunboxHardware::KNOB_4;
+constexpr int KNOB_5 = daisy::FunboxHardware::KNOB_5;
+constexpr int KNOB_6 = daisy::FunboxHardware::KNOB_6;
+#endif
 #include "util/CpuLoadMeter.h"
 
 using namespace daisy;
@@ -69,7 +98,7 @@ struct DriftMod {
 // Hardware + UI
 // ============================================================
 
-FunboxHardware hw;
+HardwareType hw;
 Parameter level, bass, mid, treble, reverb_amt;
 // ============================================================
 // Model / DSP
@@ -206,7 +235,8 @@ static void AudioCallback(AudioHandle::InputBuffer in,
     sigBlock[i] = dc_in.Process(in[0][i]);
   }
 
-  const bool ir_on = hw.switches[FunboxHardware::SW_10].Pressed();
+  // IR is ON if toggle 1 is not in the middle position
+  const bool ir_on = (t_toggle1 != TogglePos::Middle);
   const bool doubler_on = doublerEnabled;
 
   const float fade_inc = 1.0f / (hw.AudioSampleRate() * 0.05f);
@@ -295,13 +325,12 @@ int main(void) {
   hw.SetAudioBlockSize(AUDIO_BLOCK_SIZE);
   cpu_load_meter.Init(hw.AudioSampleRate(), AUDIO_BLOCK_SIZE);
 
-  level.Init(hw.knob[FunboxHardware::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
-  reverb_amt.Init(hw.knob[FunboxHardware::KNOB_2], 0.0f, 0.2f,
-                  Parameter::LINEAR);
+  level.Init(hw.knobs[KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
+  reverb_amt.Init(hw.knobs[KNOB_2], 0.0f, 0.2f, Parameter::LINEAR);
   // Knob 3 unused
-  bass.Init(hw.knob[FunboxHardware::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
-  mid.Init(hw.knob[FunboxHardware::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
-  treble.Init(hw.knob[FunboxHardware::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
+  bass.Init(hw.knobs[KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
+  mid.Init(hw.knobs[KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
+  treble.Init(hw.knobs[KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
 
   reverb.setSampleRate(hw.AudioSampleRate());
   reverb.setTimeScale(0.65f);
@@ -364,8 +393,8 @@ int main(void) {
 
     // Toggle 1: IR selection
     TogglePos new_t1 =
-        map_three_way(hw.switches[FunboxHardware::SW_3].Pressed(),
-                      hw.switches[FunboxHardware::SW_4].Pressed());
+      map_three_way(hw.switches[SWITCH_1_POS1].Pressed(),
+              hw.switches[SWITCH_1_POS3].Pressed());
     if (new_t1 != t_toggle1) {
       t_toggle1 = new_t1;
       int ir_idx = 0;
@@ -390,8 +419,8 @@ int main(void) {
 
     // Toggle 2: Headphone cab-specific EQ
     TogglePos new_t2 =
-        map_three_way(hw.switches[FunboxHardware::SW_5].Pressed(),
-                      hw.switches[FunboxHardware::SW_6].Pressed());
+      map_three_way(hw.switches[SWITCH_2_POS1].Pressed(),
+              hw.switches[SWITCH_2_POS3].Pressed());
     if (new_t2 != t_toggle2) {
       t_toggle2 = new_t2;
       float hpf_freq, lpf_freq;
@@ -417,8 +446,8 @@ int main(void) {
 
     // Toggle 3: Doubler enable
     TogglePos new_t3 =
-        map_three_way(hw.switches[FunboxHardware::SW_7].Pressed(),
-                      hw.switches[FunboxHardware::SW_8].Pressed());
+      map_three_way(hw.switches[SWITCH_3_POS1].Pressed(),
+              hw.switches[SWITCH_3_POS3].Pressed());
     if (new_t3 != t_toggle3) {
       t_toggle3 = new_t3;
       doublerEnabled = (t_toggle3 == TogglePos::Right);
