@@ -150,10 +150,10 @@ float s_reverb_amt = 0.0f;
 // ============================================================
 // Tiny Bass Boost (pre-EQ)
 // ============================================================
-static const float BASS_BOOST_AMOUNT = 0.2f;
+float bass_boost_db = 0.0f; // Is set by toggle 2
 static const float BASS_FREQ = 110.0f;
 static const float BASS_Q = 0.7f;
-cycfi::q::peaking bass_boost(BASS_BOOST_AMOUNT, BASS_FREQ, 48000, BASS_Q);
+cycfi::q::peaking bass_boost(bass_boost_db, BASS_FREQ, 48000, BASS_Q);
 
 // ============================================================
 // EQ
@@ -429,31 +429,27 @@ int main(void) {
       }
     }
 
-    // Toggle 2: Headphone cab-specific EQ
+    // Toggle 2: Adjust bass boost dB
     TogglePos new_t2 =
       map_three_way(hw.switches[SWITCH_2_POS1].Pressed(),
               hw.switches[SWITCH_2_POS3].Pressed());
     if (new_t2 != t_toggle2) {
       t_toggle2 = new_t2;
-      float hpf_freq, lpf_freq;
-      cab_freqs(t_toggle2, hpf_freq, lpf_freq);
-      headphone_hpf.config(hpf_freq, hw.AudioSampleRate(), 0.707f);
-      headphone_lpf.config(lpf_freq, hw.AudioSampleRate(), 0.707f);
-      float pres_db = 0.0f;
       switch (t_toggle2) {
         case TogglePos::Left:
-          pres_db = +1.5f;
-          break;  // brighter
+          bass_boost_db = 0.0f; // No boost
+          break;
         case TogglePos::Middle:
-          pres_db = 0.0f;
+          bass_boost_db = 0.2f; // Small boost
           break;
         case TogglePos::Right:
-          pres_db = -3.0f;
-          break;  // darker/smoother
+          bass_boost_db = 0.5f; // Large boost
+          break;
         default:
+          bass_boost_db = 0.2f;
           break;
       }
-      hp_presence.config(pres_db, 3200.0f, hw.AudioSampleRate(), 0.9f);
+      bass_boost.config(bass_boost_db, BASS_FREQ, hw.AudioSampleRate(), BASS_Q);
     }
 
     // Toggle 3: Doubler enable
