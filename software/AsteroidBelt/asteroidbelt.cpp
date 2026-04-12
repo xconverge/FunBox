@@ -146,6 +146,15 @@ float s_mid_db = 0.0f;
 float s_treble_db = 0.0f;
 float s_reverb_amt = 0.0f;
 
+
+// ============================================================
+// Tiny Bass Boost (pre-EQ)
+// ============================================================
+static const float BASS_BOOST_AMOUNT = 0.2f;
+static const float BASS_FREQ = 110.0f;
+static const float BASS_Q = 0.7f;
+cycfi::q::peaking bass_boost(BASS_BOOST_AMOUNT, BASS_FREQ, 48000, BASS_Q);
+
 // ============================================================
 // EQ
 // ============================================================
@@ -232,7 +241,10 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   }
 
   for (size_t i = 0; i < size; ++i) {
-    sigBlock[i] = dc_in.Process(in[0][i]);
+    float x = dc_in.Process(in[0][i]);
+
+    // Apply tiny bass boost before EQ
+    sigBlock[i] = bass_boost(x);
   }
 
   // IR is ON if toggle 1 is not in the middle position
