@@ -256,7 +256,7 @@ static void AudioCallback(AudioHandle::InputBuffer in,
   if (ir_on) {
     mIR.processBlock(sigBlock, irBlock, size);
   } else {
-    arm_copy_f32(sigBlock, irBlock, size);
+    std::copy(sigBlock, sigBlock + size, irBlock);
   }
 
   const float wetAmountReverb = s_reverb_amt;

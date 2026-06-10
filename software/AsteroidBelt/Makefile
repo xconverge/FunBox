@@ -21,8 +21,8 @@ CMSIS_DSP_SRC = \
 $(CMSIS_DSP_DIR)/Source/FilteringFunctions/arm_fir_f32.c \
 $(CMSIS_DSP_DIR)/Source/FilteringFunctions/arm_fir_init_f32.c \
 $(CMSIS_DSP_DIR)/Source/SupportFunctions/arm_fill_f32.c \
-$(CMSIS_DSP_DIR)/Source/BasicMathFunctions/arm_scale_f32.c \
-$(CMSIS_DSP_DIR)/Source/SupportFunctions/arm_copy_f32.c
+$(CMSIS_DSP_DIR)/Source/BasicMathFunctions/arm_scale_f32.c
+C_DEFS += -DARM_MATH_LOOPUNROLL
 
 CPP_SOURCES = asteroidbelt.cpp funbox_hardware.cpp hothouse_hardware.cpp ImpulseResponse/ImpulseResponse.cpp \
 	Dattorro/Dattorro.cpp Dattorro/dsp/delays/InterpDelay.cpp Dattorro/dsp/filters/OnePoleFilters.cpp
